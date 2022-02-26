@@ -176,7 +176,10 @@ class Simulation(object):
     def interval_height(self) -> float:
         return self.total_height / self.num_grid_height
 
-    def create_all_instantiate(self, order_file_date: str = "0601") -> None:
+    def create_all_instantiate(
+        self,
+        order_file_date: str,
+    ) -> None:
         print("Read all files")
         (
             node_df,
@@ -184,7 +187,7 @@ class Simulation(object):
             orders_df,
             vehicles,
             self.__cost_map,
-        ) = read_all_files(order_file_date)
+        ) = read_all_files(order_file_date, self.demand_prediction_mode)
         self.node_manager = NodeManager(node_df)
 
         if self.area_mode == AreaMode.CLUSTER:
@@ -247,7 +250,7 @@ class Simulation(object):
         ]
         self.__init_vehicles_into_area()
 
-    def reload(self, order_file_date="0601"):
+    def reload(self, order_file_date):
         """
         Read a new order into the simulator and
         reset some variables of the simulator
@@ -267,9 +270,13 @@ class Simulation(object):
 
         # read orders
         # -----------------------------------------
+        if self.demand_prediction_mode == DemandPredictionMode.TRAIN:
+            directory = "train"
+        else:
+            directory = "test"
         order_df = read_order(
             input_file_path=base_data_path
-            / TRAIN
+            / directory
             / f"order_2016{str(order_file_date)}.csv"
         )
         self.orders = [
@@ -667,11 +674,11 @@ class Simulation(object):
         return clusters
 
     def __load_demand_prediction(self):
-        if self.demand_prediction_mode == DemandPredictionMode.TRAINING:
+        if self.demand_prediction_mode == DemandPredictionMode.TRAIN:
             self.demand_predictor_module = None
             return
 
-        elif self.demand_prediction_mode == DemandPredictionMode.HA:
+        elif self.demand_prediction_mode == DemandPredictionMode.TEST:
             self.demand_predictor_module = HAPredictionModel()
             demand_prediction_model_path = (
                 "./model/"
@@ -1222,6 +1229,10 @@ class Simulation(object):
             "Totally Simulation Time : " + str(self.static_service.totally_match_time)
         )
         print("Episode Run time : " + str(episode_end_time - episode_start_time))
+
+        self.static_service.save_stats(
+            date=f"2016{self.orders[0].release_time.month}{self.orders[0].release_time.day}"
+        )
 
 
 """

@@ -3,6 +3,8 @@ from math import asin, cos, radians, sin, sqrt
 
 import numpy as np
 
+from domain.demand_prediction_mode import DemandPredictionMode
+
 
 def haversine(lon1, lat1, lon2, lat2) -> float:
     """
@@ -20,8 +22,12 @@ def haversine(lon1, lat1, lon2, lat2) -> float:
 
 
 class DataModule:
-    def __init__(self):
-        self.__date = datetime(2016, 6, 1)
+    def __init__(self, demand_prediction_mode: DemandPredictionMode):
+        self.__demand_prediction_mode = demand_prediction_mode
+        if self.__demand_prediction_mode == DemandPredictionMode.TRAIN:
+            self.__date = datetime(2016, 6, 1)
+        else:
+            self.__date = datetime(2016, 6, 24)
 
     @property
     def date(self) -> str:
@@ -29,9 +35,13 @@ class DataModule:
 
     def next(self) -> bool:
         next_day = self.__date + timedelta(days=1)
-        if next_day.month != 6:
-            False
         self.__date = next_day
+        if self.__demand_prediction_mode == DemandPredictionMode.TRAIN:
+            if next_day.day == 24:
+                return False
+        else:
+            if next_day.month != 6:
+                return False
         return True
 
     def __str__(self) -> str:

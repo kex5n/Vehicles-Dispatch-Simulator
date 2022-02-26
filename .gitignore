@@ -106,3 +106,4 @@ data/Order
 data/*.csv
 data/*.pbf
 *.DS_Store
+outputs/*

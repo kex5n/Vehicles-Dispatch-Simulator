@@ -1,4 +1,5 @@
 from config import Config
+from domain.demand_prediction_mode import DemandPredictionMode
 from simulator.simulator import Simulation
 from util import DataModule
 
@@ -18,10 +19,18 @@ if __name__ == "__main__":
         pick_up_time_window=config.PICKUPTIMEWINDOW
     )
 
-    date_module = DataModule()
+    date_module = DataModule(demand_prediction_mode=config.DEMAND_PREDICTION_MODE)
     simulator.create_all_instantiate(date_module.date)
     simulator()
 
     while date_module.next():
         simulator.reload(date_module.date)
         simulator()
+
+    if config.DEMAND_PREDICTION_MODE == DemandPredictionMode.TEST:
+        simulator.static_service.write_stats(
+            data_size=config.DATA_SIZE,
+            num_vehicles=config.VEHICLES_NUMBER,
+            area_mode=config.AREA_MODE,
+            dispatch_mode=config.DISPATCH_MODE,
+        )

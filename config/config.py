@@ -7,6 +7,7 @@ from domain import AreaMode, DemandPredictionMode, DispatchMode, LocalRegionBoun
 
 @dataclass(frozen=True)
 class Config:
+    DATA_SIZE: str
     MINUTES: int
     NELGHBOR_CAN_SERVER: bool
     LOCAL_REGION_BOUND: LocalRegionBound
@@ -37,6 +38,7 @@ class Config:
             north_bound=use_bounds["north"],
         )
         return Config(
+            DATA_SIZE=config["DATA_SIZE"],
             MINUTES=config["MINUTES"],
             NELGHBOR_CAN_SERVER=config["NELGHBOR_CAN_SERVER"],
             LOCAL_REGION_BOUND=LOCAL_REGION_BOUND,

@@ -6,6 +6,8 @@ from typing import List, Tuple
 import numpy as np
 import pandas as pd
 
+from domain.demand_prediction_mode import DemandPredictionMode
+
 
 def timestamp_datetime(value) -> datetime:
     d = datetime.fromtimestamp(value)
@@ -101,16 +103,6 @@ def read_order(input_file_path) -> pd.DataFrame:
     return order_df
 
 
-def read_reset_order(input_file_path) -> np.ndarray:
-    reader = pd.read_csv(input_file_path, chunksize=1000)
-    order_list = []
-    for chunk in reader:
-        order_list.append(chunk)
-    order_df = pd.concat(order_list)
-    order_values = order_df.values
-    return order_values
-
-
 def read_driver(input_file_path="./data/Drivers0601.csv") -> np.ndarray:
     reader = pd.read_csv(input_file_path, chunksize=1000)
     driver_list = []
@@ -124,16 +116,20 @@ def read_driver(input_file_path="./data/Drivers0601.csv") -> np.ndarray:
 
 
 def read_all_files(
-    order_file_date: str = "0601",
+    order_file_date: str, demand_prediction_mode: DemandPredictionMode
 ) -> Tuple[pd.DataFrame, List[int], pd.DataFrame, np.ndarray, pd.DataFrame]:
     node_path = os.path.join(os.getcwd(), "data", "Node.csv")
     node_id_list_path = os.path.join(os.getcwd(), "data", "NodeIDList.txt")
+    if demand_prediction_mode == DemandPredictionMode.TRAIN:
+        directory = "train"
+    else:
+        directory = "test"
     orders_path = os.path.join(
         os.getcwd(),
         "data",
         "Order",
         "modified",
-        "train",
+        directory,
         "order_2016" + order_file_date + ".csv",
     )
     vehicles_path = os.path.join(os.getcwd(), "data", "Drivers0601.csv")
@@ -145,26 +141,3 @@ def read_all_files(
     vehicles = read_driver(vehicles_path)
     cost_map = read_cost_map(map_path)
     return node_df, node_id_list, orders, vehicles, cost_map
-
-
-def read_orders_vehicles_files(order_file_date: str = "0601"):
-    orders_path = os.path.join(
-        os.getcwd(),
-        "data",
-        "Order",
-        "modified",
-        "train",
-        "order_2016" + order_file_date + ".csv",
-    )
-    vehicles_path = os.path.join(os.getcwd(), "data", "Drivers0601.csv")
-    orders = read_order(orders_path)
-    vehicles = read_driver(vehicles_path)
-    return orders, vehicles
-
-
-def read_local_region_bound_orders_vehicles_files(SaveLocalRegionBoundOrdersPath):
-    OrdersPath = os.path.join(
-        os.getcwd(), "data", "order_2016" + order_file_date + ".csv"
-    )
-    orders = read_order(OrdersPath)
-    return orders
