@@ -8,4 +8,4 @@ class LocalRegionBound:
     south_bound: float
 
     def __str__(self):
-        return "({self.west_bound}, {self.east_bound}, {self.south_bound}, {self.north_bound})"
+        return f"({self.west_bound}, {self.east_bound}, {self.south_bound}, {self.north_bound})"
