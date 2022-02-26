@@ -2,26 +2,24 @@ import datetime
 import os
 import random
 from pathlib import Path
-from typing import List, Mapping, Optional, Tuple
+from typing import List, Mapping, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from config.setting import MINUTES, PICKUPTIMEWINDOW
-from domain.area_mode import AreaMode
-from domain.arrive_info import ArriveInfo
-from domain.demand_prediction_mode import DemandPredictionMode
-from domain.local_region_bound import LocalRegionBound
-from objects.objects import Area, Cluster, Grid, Order, Vehicle
-from preprocessing.readfiles import (
-    read_all_files,
-    read_map,
-    read_order,
-    read_reset_order,
-    string_pd_timestamp,
+from domain import (
+    AreaMode,
+    ArriveInfo,
+    DemandPredictionMode,
+    DispatchMode,
+    LocalRegionBound,
 )
+from modules import DispatchModuleInterface, StaticsService
+from modules.dispatch import RandomDispatch
+from objects import Area, Cluster, Grid, NodeManager, Order, Vehicle
+from preprocessing.readfiles import read_all_files, read_map, read_order
 from util import haversine
 
 ###########################################################################
@@ -56,49 +54,38 @@ class Simulation(object):
         self,
         area_mode: AreaMode,
         demand_prediction_mode: DemandPredictionMode,
-        dispatch_mode: str,
+        dispatch_mode: DispatchMode,
         vehicles_number: int,
         time_periods: np.timedelta64,
         local_region_bound: LocalRegionBound,
         side_length_meter: int,
         vehicles_server_meter: int,
         neighbor_can_server: bool,
-        focus_on_local_region: bool,
+        minutes: int,
+        pick_up_time_window: np.float64,
     ):
 
         # Component
-        self.dispatch_module = None
+        self.dispatch_module: DispatchModuleInterface = self.__load_dispatch_component(
+            dispatch_mode=dispatch_mode
+        )
         self.demand_predictor_module = None
+        self.node_manager: NodeManager = None
 
         # Statistical variables
-        self.order_num: int = 0
-        self.reject_num: int = 0
-        self.dispatch_num: int = 0
-        self.totally_dispatch_cost: int = 0
-        self.totally_wait_time: int = 0
-        self.totally_update_time = datetime.timedelta()
-        self.totally_reward_time = datetime.timedelta()
-        self.totally_next_state_time = datetime.timedelta()
-        self.totally_learning_time = datetime.timedelta()
-        self.totally_dispatch_time = datetime.timedelta()
-        self.totally_match_time = datetime.timedelta()
-        self.totally_demand_predict_time = datetime.timedelta()
+        self.static_service = StaticsService()
 
         # Data variable
         self.areas: List[Area] = None
         self.orders: List[Order] = None
         self.vehicles: List[Vehicle] = None
-        self.map: pd.DataFrame = None
-        self.node: pd.DataFrame = None
-        self.node_id_list: List[int] = None
+        self.__cost_map: np.ndarray = None
         self.node_id_to_area: Mapping[int, Area] = {}
-        self.node_id_to_nodes_location: Mapping[int, Tuple[float, float]] = {}
         self.transition_temp_prool: List = []
+        self.minutes = minutes
+        self.pick_up_time_window = pick_up_time_window
 
-        self.map_west_bound = local_region_bound.west_bound
-        self.map_east_bound = local_region_bound.east_bound
-        self.map_south_bound = local_region_bound.south_bound
-        self.map_north_bound = local_region_bound.north_bound
+        self.local_region_bound = local_region_bound
 
         # Weather data
         # TODO: MUST CHANGE
@@ -126,10 +113,9 @@ class Simulation(object):
 
         # Input parameters
         self.area_mode: AreaMode = area_mode
-        self.dispatch_mode: str = dispatch_mode
+        self.dispatch_mode: DispatchMode = dispatch_mode
         self.vehicles_number: int = vehicles_number
         self.time_periods: np.timedelta64 = time_periods
-        self.local_region_bound: LocalRegionBound = local_region_bound
         self.side_length_meter: int = side_length_meter
         self.vehicle_service_meter: int = vehicles_server_meter
         self.num_grid_width: int = None
@@ -138,7 +124,6 @@ class Simulation(object):
 
         # Control variable
         self.neighbor_can_server = neighbor_can_server
-        self.focus_on_local_region = focus_on_local_region
 
         # Process variable
         self.real_exp_time = None
@@ -152,6 +137,21 @@ class Simulation(object):
         self.demand_prediction_mode: DemandPredictionMode = demand_prediction_mode
         self.supply_expect = None
 
+    @property
+    def map_west_bound(self):
+        return self.local_region_bound.west_bound
+
+    @property
+    def map_east_bound(self):
+        return self.local_region_bound.east_bound
+
+    @property
+    def map_south_bound(self):
+        return self.local_region_bound.south_bound
+
+    @property
+    def map_north_bound(self):
+        return self.local_region_bound.north_bound
 
     @property
     def num_areas(self) -> Optional[int]:
@@ -159,6 +159,93 @@ class Simulation(object):
             return None
         else:
             return self.num_grid_width * self.num_grid_height
+
+    @property
+    def total_width(self) -> float:
+        return self.map_east_bound - self.map_west_bound
+
+    @property
+    def total_height(self) -> float:
+        return self.map_north_bound - self.map_south_bound
+
+    @property
+    def interval_width(self) -> float:
+        return self.total_width / self.num_grid_width
+
+    @property
+    def interval_height(self) -> float:
+        return self.total_height / self.num_grid_height
+
+    def create_all_instantiate(self, order_file_date: str = "0601") -> None:
+        print("Read all files")
+        (
+            node_df,
+            self.node_id_list,
+            orders_df,
+            vehicles,
+            self.__cost_map,
+        ) = read_all_files(order_file_date)
+        self.node_manager = NodeManager(node_df)
+
+        if self.area_mode == AreaMode.CLUSTER:
+            print("Create Clusters")
+            self.areas = self.__create_cluster()
+        elif self.area_mode == AreaMode.GRID:
+            print("Create Grids")
+            self.areas = self.__create_grid()
+
+        for node_id in tqdm(self.node_manager.node_id_list):
+            for area in self.areas:
+                for node in area.nodes:
+                    if node_id == node.id:
+                        self.node_id_to_area[node_id] = area
+
+        print("Create Orders set")
+        self.orders: List[Order] = [
+            Order(
+                id=order_row["ID"],
+                release_time=order_row["Start_time"],
+                pick_up_node_id=order_row["NodeS"],
+                delivery_node_id=order_row["NodeE"],
+                pick_up_time_window=order_row["Start_time"] + self.pick_up_time_window,
+                pick_up_wait_time=None,
+                arrive_info=None,
+                order_value=None,
+            )
+            for _, order_row in orders_df.iterrows()
+        ]
+
+        # Calculate the value of all orders in advance
+        # -------------------------------
+        print("Pre-calculated order value")
+        for each_order in self.orders:
+            each_order.order_value = self.__road_cost(
+                start_node_index=self.node_manager.get_node_index(
+                    each_order.pick_up_node_id
+                ),
+                end_node_index=self.node_manager.get_node_index(
+                    each_order.delivery_node_id
+                ),
+            )
+        # -------------------------------
+
+        # Select number of vehicles
+        # -------------------------------
+        vehicles = vehicles[: self.vehicles_number]
+        # -------------------------------
+
+        print("Create Vehicles set")
+        self.vehicles: List[Vehicle] = [
+            Vehicle(
+                id=vehicle_row[0],
+                location_node_id=None,
+                area=None,
+                orders=[],
+                delivery_node_id=None,
+            )
+            for vehicle_row in vehicles
+        ]
+        self.__init_vehicles_into_area()
 
     def reload(self, order_file_date="0601"):
         """
@@ -169,17 +256,7 @@ class Simulation(object):
             "Load order " + order_file_date + "and reset the experimental environment"
         )
 
-        self.order_num = 0
-        self.reject_num = 0
-        self.dispatch_num = 0
-        self.totally_dispatch_cost = 0
-        self.totally_wait_time = 0
-        self.totally_update_time = datetime.timedelta()
-        self.totally_next_state_time = datetime.timedelta()
-        self.totally_learning_time = datetime.timedelta()
-        self.totally_dispatch_time = datetime.timedelta()
-        self.totally_match_time = datetime.timedelta()
-        self.totally_demand_predict_time = datetime.timedelta()
+        self.static_service.reset()
 
         self.orders = None
         self.transition_temp_prool.clear()
@@ -190,85 +267,24 @@ class Simulation(object):
 
         # read orders
         # -----------------------------------------
-        # if self.focus_on_local_region == False:
-        if True:
-            orders = read_order(
-                input_file_path=base_data_path
-                / TRAIN
-                / f"order_2016{str(order_file_date)}.csv"
+        order_df = read_order(
+            input_file_path=base_data_path
+            / TRAIN
+            / f"order_2016{str(order_file_date)}.csv"
+        )
+        self.orders = [
+            Order(
+                id=order_row["ID"],
+                release_time=order_row["Start_time"],
+                pick_up_node_id=order_row["NodeS"],
+                delivery_node_id=order_row["NodeE"],
+                pick_up_time_window=order_row[1] + self.pick_up_time_window,
+                pick_up_wait_time=None,
+                arrive_info=None,
+                order_value=None,
             )
-            self.orders = [
-                Order(
-                    i[0],
-                    i[1],
-                    self.node_id_list.index(i[2]),
-                    self.node_id_list.index(i[3]),
-                    i[1] + PICKUPTIMEWINDOW,
-                    None,
-                    None,
-                    None,
-                )
-                for i in orders
-            ]
-        else:
-            SaveLocalRegionBoundOrdersPath = (
-                base_data_path / TRAIN / f"order_2016{str(order_file_date)}.csv"
-            )
-            if os.path.exists(SaveLocalRegionBoundOrdersPath):
-                orders = read_reset_order(
-                    input_file_path=SaveLocalRegionBoundOrdersPath
-                )
-                self.orders = [
-                    Order(
-                        i[0],
-                        string_pd_timestamp(i[1]),
-                        self.node_id_list.index(i[2]),
-                        self.node_id_list.index(i[3]),
-                        string_pd_timestamp(i[1]) + PICKUPTIMEWINDOW,
-                        None,
-                        None,
-                        None,
-                    )
-                    for i in orders
-                ]
-            else:
-                orders = read_order(
-                    input_file_path=base_data_path
-                    / TRAIN
-                    / f"order_2016{str(order_file_date)}.csv"
-                )
-                self.orders = [
-                    Order(
-                        i[0],
-                        i[1],
-                        self.node_id_list.index(i[2]),
-                        self.node_id_list.index(i[3]),
-                        i[1] + PICKUPTIMEWINDOW,
-                        None,
-                        None,
-                        None,
-                    )
-                    for i in orders
-                ]
-                # Limit order generation area
-                # -------------------------------
-                for i in self.orders[:]:
-                    if self.__is_order_in_limit_region(i) == False:
-                        self.orders.remove(i)
-                # -------------------------------
-                LegalOrdersSet = []
-                for i in self.orders:
-                    LegalOrdersSet.append(i.id)
-
-                OutBoundOrdersSet = []
-                for i in range(len(orders)):
-                    if not i in LegalOrdersSet:
-                        OutBoundOrdersSet.append(i)
-
-                orders = pd.DataFrame(orders)
-                orders = orders.drop(OutBoundOrdersSet)
-                orders.to_csv(SaveLocalRegionBoundOrdersPath, index=0)
-        # -----------------------------------------
+            for _, order_row in order_df.iterrows()
+        ]
 
         # Rename orders'ID
         # -------------------------------
@@ -280,7 +296,12 @@ class Simulation(object):
         # -------------------------------
         for each_order in self.orders:
             each_order.order_value = self.__road_cost(
-                each_order.pick_up_point, each_order.delivery_point
+                start_node_index=self.node_manager.get_node_index(
+                    each_order.pick_up_node_id
+                ),
+                end_node_index=self.node_manager.get_node_index(
+                    each_order.delivery_node_id
+                ),
             )
         # -------------------------------
 
@@ -300,17 +321,7 @@ class Simulation(object):
     def reset(self):
         print("Reset the experimental environment")
 
-        self.order_num = 0
-        self.reject_num = 0
-        self.dispatch_num = 0
-        self.totally_dispatch_cost = 0
-        self.totally_wait_time = 0
-        self.totally_update_time = datetime.timedelta()
-        self.totally_next_state_time = datetime.timedelta()
-        self.totally_learning_time = datetime.timedelta()
-        self.totally_dispatch_time = datetime.timedelta()
-        self.totally_match_time = datetime.timedelta()
-        self.totally_demand_predict_time = dt.timedelta()
+        self.static_service.reset()
 
         self.transition_temp_prool.clear()
         self.real_exp_time = None
@@ -335,19 +346,18 @@ class Simulation(object):
     def __init_vehicles_into_area(self) -> None:
         print("Initialization Vehicles into Clusters or Grids")
         for vehicle in self.vehicles:
-            while True:
-                random_node = random.choice(range(len(self.node)))
-                if random_node in self.node_id_to_area:
-                    vehicle.location_node = random_node
-                    vehicle.area = self.node_id_to_area[vehicle.location_node]
-                    vehicle.area.idle_vehicles.append(vehicle)
-                    break
+            random_node = random.choice(self.node_manager.get_nodes())
+            vehicle.location_node_id = random_node.id
+            vehicle.area = self.node_id_to_area[random_node.id]
+            vehicle.area.idle_vehicles.append(vehicle)
 
-    def __load_dispatch_component(self, dispatch_module) -> None:
-        self.dispatch_module = dispatch_module
+    def __load_dispatch_component(self, dispatch_mode: DispatchMode) -> DispatchModuleInterface:
+        if dispatch_mode == DispatchMode.RANDOM:
+            dispatch_module = RandomDispatch()
+        return dispatch_module
 
-    def __road_cost(self, start, end) -> None:
-        return int(self.map[start][end])
+    def __road_cost(self, start_node_index: int, end_node_index: int) -> int:
+        return int(self.__cost_map[start_node_index][end_node_index])
 
     def __calculate_the_scale_of_devision(self) -> None:
 
@@ -381,7 +391,6 @@ class Simulation(object):
         )
 
         print("----------------------------")
-        print("Map extent", self.local_region_bound)
         print("The width of each grid", self.side_length_meter, "meters")
         print("Vehicle service range", self.vehicle_service_meter, "meters")
         print("Number of grids in east-west direction", self.num_grid_width)
@@ -389,155 +398,24 @@ class Simulation(object):
         print("Number of grids", self.num_areas)
         print("----------------------------")
 
-
-    def create_all_instantiate(self, order_file_date: str = "0601") -> None:
-        print("Read all files")
-        self.node, self.node_id_list, orders_df, vehicles, self.map = read_all_files(
-            order_file_date
-        )
-
-        if self.area_mode == AreaMode.CLUSTER:
-            print("Create Clusters")
-            self.areas = self.__create_cluster()
-        elif self.area_mode == AreaMode.GRID:
-            print("Create Grids")
-            self.areas = self.__create_grid()
-
-        # Construct NodeID to Cluseter map for Fast calculation
-        node_id_list = self.node["NodeID"].values.copy()
-        for i in range(len(node_id_list)):
-            node_id_list[i] = self.node_id_list.index(node_id_list[i])
-        
-        for node_id in tqdm(node_id_list):
-            for area in self.areas:
-                for node in area.nodes:
-                    if node_id == node[0]:
-                        self.node_id_to_area[node_id] = area
-
-        print("Create Orders set")
-        self.orders: List[Order] = [
-            Order(
-                id=order_row[0],
-                release_time=order_row[1],
-                pick_up_point=self.node_id_list.index(order_row[2]),
-                delivery_point=self.node_id_list.index(order_row[3]),
-                pick_up_time_window=order_row[1] + PICKUPTIMEWINDOW,
-                pick_up_wait_time=None,
-                arrive_info=None,
-                order_value=None,
-            )
-            for order_row in orders_df
-        ]
-
-        # Limit order generation area
-        # -------------------------------
-        if self.focus_on_local_region == True:
-            print("Remove out-of-bounds Orders")
-            for order in self.orders[:]:
-                if self.__is_order_in_limit_region(order) == False:
-                    self.orders.remove(order)
-            for i in range(len(self.orders)):
-                self.orders[i].id = i
-        # -------------------------------
-
-        # Calculate the value of all orders in advance
-        # -------------------------------
-        print("Pre-calculated order value")
-        for each_order in self.orders:
-            each_order.order_value = self.__road_cost(
-                start=each_order.pick_up_point, end=each_order.delivery_point
-            )
-        # -------------------------------
-
-        # Select number of vehicles
-        # -------------------------------
-        vehicles = vehicles[: self.vehicles_number]
-        # -------------------------------
-
-        print("Create Vehicles set")
-        self.vehicles: List[Vehicle] = [
-            Vehicle(
-                id=vehicle_row[0],
-                location_node=self.node_id_list.index(vehicle_row[1]),
-                area=None,
-                orders=[],
-                delivery_point=None,
-            )
-            for vehicle_row in vehicles
-        ]
-        self.__init_vehicles_into_area()
-
     def __is_order_in_limit_region(self, order: Order) -> bool:
-        if not order.pick_up_point in self.node_id_to_nodes_location:
+        if not order.pick_up_node_id in self.node_id_list:
             return False
-        if not order.delivery_point in self.node_id_to_nodes_location:
-            return False
-
-        return True
-
-    def __is_node_in_limit_region(self, tmp_node_id_list) -> bool:
-        if (
-            tmp_node_id_list[0][0] < self.local_region_bound.west_bound
-            or tmp_node_id_list[0][0] > self.local_region_bound.east_bound
-        ):
-            return False
-        elif (
-            tmp_node_id_list[0][1] < self.local_region_bound.south_bound
-            or tmp_node_id_list[0][1] > self.local_region_bound.north_bound
-        ):
+        if not order.delivery_node_id in self.node_id_list:
             return False
 
         return True
 
     def __create_grid(self) -> List[Area]:
-        node_location: np.ndarray = self.node[["Longitude", "Latitude"]].values.round(7)
-        node_id_list: np.ndarray = self.node["NodeID"].values.astype("int64")
-
-        # Select small area simulation
-        # ----------------------------------------------------
-        if self.focus_on_local_region:
-            node_location: List[float] = node_location.tolist()
-            node_id_list: List[float] = node_id_list.tolist()
-
-            tmp_node_list = []
-            for i in range(len(node_location)):
-                tmp_node_list.append((node_location[i], node_id_list[i]))
-
-            for i in tmp_node_list:
-                if self.__is_node_in_limit_region(i) == False:
-                    tmp_node_list.remove(i)
-
-            node_location.clear()
-            node_id_list.clear()
-
-            for i in tmp_node_list:
-                node_location.append(i[0])
-                node_id_list.append(i[1])
-
-            node_location = np.array(node_location)
-        # --------------------------------------------------
+        node_id_list = self.node_manager.node_id_list
         node_dict = {}
         for i in tqdm(range(len(node_id_list))):
             node_dict[
-                (node_location[i][0], node_location[i][1])
+                (
+                    self.node_manager.node_locations[i][0],
+                    self.node_manager.node_locations[i][1],
+                )
             ] = self.node_id_list.index(node_id_list[i])
-
-        # Build each grid
-        # ------------------------------------------------------
-        if self.focus_on_local_region == True:
-            total_width = (
-                self.local_region_bound.east_bound - self.local_region_bound.west_bound
-            )
-            total_height = (
-                self.local_region_bound.north_bound
-                - self.local_region_bound.south_bound
-            )
-        else:
-            total_width = self.map_east_bound - self.map_west_bound
-            total_height = self.map_north_bound - self.map_south_bound
-
-        interval_width = total_width / self.num_grid_width
-        interval_height = total_height / self.num_grid_height
 
         all_grid: List[Area] = [
             Grid(
@@ -552,52 +430,19 @@ class Simulation(object):
             for i in range(self.num_areas)
         ]
 
-        for lonlat, node_idx in tqdm(node_dict.items()):
-            now_grid_width_num = None
-            now_grid_height_num = None
+        for node in self.node_manager.get_nodes():
+            relatively_longitude = node.longitude - self.map_west_bound
+            now_grid_width_num = int(relatively_longitude // self.interval_width)
+            assert now_grid_width_num <= self.num_grid_width - 1
 
-            for i in range(self.num_grid_width):
-                if self.focus_on_local_region == True:
-                    left_bound = self.local_region_bound.west_bound + i * interval_width
-                    right_bound = (
-                        self.local_region_bound.west_bound + (i + 1) * interval_width
-                    )
-                else:
-                    left_bound = self.map_west_bound + i * interval_width
-                    right_bound = self.map_west_bound + (i + 1) * interval_width
+            relatively_latitude = node.latitude - self.map_south_bound
+            now_grid_height_num = int(relatively_latitude // self.interval_height)
+            assert now_grid_height_num <= self.num_grid_height - 1
 
-                if lonlat[0] > left_bound and lonlat[0] <= right_bound:
-                    now_grid_width_num = i
-                    break
-
-            for i in range(self.num_grid_height):
-                if self.focus_on_local_region == True:
-                    down_bound = (
-                        self.local_region_bound.south_bound + i * interval_height
-                    )
-                    up_bound = (
-                        self.local_region_bound.south_bound + (i + 1) * interval_height
-                    )
-                else:
-                    down_bound = self.map_south_bound + i * interval_height
-                    up_bound = self.map_south_bound + (i + 1) * interval_height
-
-                if lonlat[1] > down_bound and lonlat[1] <= up_bound:
-                    now_grid_height_num = i
-                    break
-
-            if now_grid_width_num == None or now_grid_height_num == None:
-                print(lonlat[0], lonlat[1])
-                raise Exception("error")
-            else:
-                all_grid[
-                    self.num_grid_width * now_grid_height_num + now_grid_width_num
-                ].nodes.append((node_idx, (lonlat[0], lonlat[1])))
+            all_grid[
+                self.num_grid_width * now_grid_height_num + now_grid_width_num
+            ].nodes.append(node)
         # ------------------------------------------------------
-
-        for grid in all_grid:
-            for node in grid.nodes:
-                self.node_id_to_nodes_location[node[0]] = node[1]
 
         # Add neighbors to each grid
         # ------------------------------------------------------
@@ -673,35 +518,8 @@ class Simulation(object):
         return all_grid
 
     def __create_cluster(self) -> List[Area]:
-
         node_location: np.ndarray = self.node[["Longitude", "Latitude"]].values.round(7)
         node_id_list: np.ndarray = self.node["NodeID"].values.astype("int64")
-
-        # Set Nodes In Limit Region
-        # ----------------------------------------
-        if self.focus_on_local_region == True:
-            print("Remove out-of-bounds Nodes")
-            node_location: List = node_location.tolist()
-            node_id_list: List = node_id_list.tolist()
-
-            tmp_node_list = []
-            for i in range(len(node_location)):
-                tmp_node_list.append((node_location[i], node_id_list[i]))
-
-            for i in tmp_node_list[:]:
-                if self.__is_node_in_limit_region(i) == False:
-                    tmp_node_list.remove(i)
-
-            node_location.clear()
-            node_id_list.clear()
-
-            for i in tmp_node_list:
-                # NodeLocation.append(i[0])
-                node_location.append(i[0])
-                node_id_list.append(i[1])
-
-            node_location = np.array(node_location)
-        # ----------------------------------------
 
         N = {}
         for i in range(len(node_id_list)):
@@ -772,7 +590,14 @@ class Simulation(object):
                         tmp_sum_cost = 0
                         for node_1 in cluster_1.nodes:
                             for node_2 in cluster_2.nodes:
-                                tmp_sum_cost += self.__road_cost(node_1[0], node_2[0])
+                                tmp_sum_cost += self.__road_cost(
+                                    start_node_index=self.node_manager.get_node_index(
+                                        node_1.id
+                                    ),
+                                    end_node_index=self.node_manager.get_node_index(
+                                        node_2.id
+                                    ),
+                                )
                         if (len(cluster_1.nodes) * len(cluster_2.nodes)) == 0:
                             road_network_distance = 99999
                         else:
@@ -820,12 +645,6 @@ class Simulation(object):
                 else:
                     continue
         del id_to_cluster
-
-        # self.node_id_to_nodes_location = {}
-        print("Store node coordinates for drawing")
-        for cluster in clusters:
-            for node in cluster.nodes:
-                self.node_id_to_nodes_location[node[0]] = node[1]
 
         # You can draw every cluster(red) and neighbor(random color) here
         # ----------------------------------------------
@@ -919,24 +738,19 @@ class Simulation(object):
         for _ in range(len(self.areas)):
             areas_color.append(self.randomcolor())
 
-        NodeNumber = len(self.node)
-        for i in tqdm(range(NodeNumber)):
-            if not i in self.node_id_to_nodes_location:
-                continue
-            for j in range(NodeNumber):
-                if not j in self.node_id_to_nodes_location:
-                    continue
+        for i in tqdm(self.node_manager.node_id_list):
+            for j in range(self.node_manager.node_id_list):
                 if i == j:
                     continue
 
                 if connection_map[i][j] <= 3000:
                     LX = [
-                        self.node_id_to_nodes_location[i][0],
-                        self.node_id_to_nodes_location[j][0],
+                        self.node_manager.get_node(i).longitude,
+                        self.node_manager.get_node(j).longitude,
                     ]
                     LY = [
-                        self.node_id_to_nodes_location[i][1],
-                        self.node_id_to_nodes_location[j][1],
+                        self.node_manager.get_node(i).latitude,
+                        self.node_manager.get_node(j).latitude,
                     ]
 
                     if self.node_id_to_area[i] == self.node_id_to_area[j]:
@@ -960,27 +774,22 @@ class Simulation(object):
         connection_map = connection_map[0]
 
         areas_color = []
-        for i in range(len(self.Areas)):
+        for _ in range(len(self.areas)):
             areas_color.append(self.randomcolor())
 
-        node_size = len(self.node)
-        for i in range(node_size):
-            if not i in self.node_id_to_nodes_location:
-                continue
-            for j in range(node_size):
-                if not j in self.node_id_to_nodes_location:
-                    continue
+        for i in self.node_id_list:
+            for j in self.node_id_list:
                 if i == j:
                     continue
 
                 if connection_map[i][j] <= 3000:
                     LX = [
-                        self.node_id_to_nodes_location[i][0],
-                        self.node_id_to_nodes_location[j][0],
+                        self.node_manager.get_node(i).longitude,
+                        self.node_manager.get_node(j).longitude,
                     ]
                     LY = [
-                        self.node_id_to_nodes_location[i][1],
-                        self.node_id_to_nodes_location[j][1],
+                        self.node_manager.get_node(i).latitude,
+                        self.node_manager.get_node(j).latitude,
                     ]
 
                     plt.plot(
@@ -1011,16 +820,16 @@ class Simulation(object):
     def draw_all_vehicles(self) -> None:
         for area in self.areas:
             for vehicle in area.idle_vehicles:
-                res = self.node_id_to_nodes_location[vehicle.location_node]
-                X = res[0]
-                Y = res[1]
+                res = self.node_manager.get_node(vehicle.location_node_id)
+                X = res.longitude
+                Y = res.latitude
                 plt.scatter(X, Y, s=3, c="b", alpha=0.3)
 
-            for key in area.vehicles_arrive_time:
-                res = self.node_id_to_nodes_location[key.location_node]
-                X = res[0]
-                Y = res[1]
-                if len(key.orders):
+            for vehicle in area.vehicles_arrive_time:
+                res = self.node_manager.get_node(vehicle.location_node_id)
+                X = res.longitude
+                Y = res.latitude
+                if len(vehicle.orders):
                     plt.scatter(X, Y, s=3, c="r", alpha=0.3)
                 else:
                     plt.scatter(X, Y, s=3, c="g", alpha=0.3)
@@ -1032,8 +841,10 @@ class Simulation(object):
         plt.show()
 
     def draw_vehicle_trajectory(self, vehicle: Vehicle) -> None:
-        X1, Y1 = self.node_id_to_nodes_location[vehicle.location_node]
-        X2, Y2 = self.node_id_to_nodes_location[vehicle.delivery_point]
+        node_1 = self.node_manager.get_node(vehicle.location_node_id)
+        X1, Y1 = node_1.longitude, node_1.latitude
+        node_2 = self.node_manager.get_node(vehicle.delivery_node_id)
+        X2, Y2 = node_2.longitude, node_2.latitude
         # start location
         plt.scatter(X1, Y1, s=3, c="black", alpha=0.3)
         # destination
@@ -1055,43 +866,6 @@ class Simulation(object):
         else:
             return "Workday"
 
-    def __get_time_and_weather(self, order: Order):
-        month = order.release_time.month
-        day = order.release_time.day
-        week = order.release_time.weekday()
-        if week == 5 or week == 6:
-            weekend = 1
-        else:
-            weekend = 0
-        hour = order.release_time.hour
-        minute = order.release_time.minute
-
-        if month == 11:
-            if hour < 12:
-                weather_type = self.weather_type[2 * (day - 1)]
-            else:
-                weather_type = self.weather_type[2 * (day - 1) + 1]
-        else:
-            raise Exception("Month format error")
-
-        minimum_temperature = self.minimum_temperature[day - 1]
-        maximum_temperature = self.maximum_temperature[day - 1]
-        wind_direction = self.wind_direction[day - 1]
-        wind_power = self.wind_power[day - 1]
-
-        return [
-            day,
-            week,
-            weekend,
-            hour,
-            minute,
-            weather_type,
-            minimum_temperature,
-            maximum_temperature,
-            wind_direction,
-            wind_power,
-        ]
-
     ############################################################################
 
     # The main modules
@@ -1110,11 +884,11 @@ class Simulation(object):
         """
         self.supply_expect = np.zeros(self.num_areas)
         for area in self.areas:
-            for key, value in list(area.vehicles_arrive_time.items()):
+            for vehicle, time in list(area.vehicles_arrive_time.items()):
                 # key = Vehicle ; value = Arrivetime
                 if (
-                    value <= self.real_exp_time + self.time_periods
-                    and len(key.orders) > 0
+                    time <= self.real_exp_time + self.time_periods
+                    and len(vehicle.orders) > 0
                 ):
                     self.supply_expect[area.id] += 1
 
@@ -1123,7 +897,11 @@ class Simulation(object):
         Here you can implement your own Dispatch method to
         move idle vehicles in each cluster to other clusters
         """
-        return
+        for area in self.areas:
+            for vehicles in area.idle_vehicles:
+                dispatched = self.dispatch_module(vehicles)
+                if dispatched:
+                    self.static_service.increment_dispatch_num()
 
     def __match_function(self) -> None:
         """
@@ -1142,8 +920,8 @@ class Simulation(object):
             if self.now_order.id == self.orders[-1].id:
                 break
 
-            self.order_num += 1
-            now_area: Area = self.node_id_to_area[self.now_order.pick_up_point]
+            self.static_service.increment_order_num()
+            now_area: Area = self.node_id_to_area[self.now_order.pick_up_node_id]
             now_area.orders.append(self.now_order)
 
             if len(now_area.idle_vehicles) or len(now_area.neighbor):
@@ -1154,13 +932,18 @@ class Simulation(object):
                     # Find a nearest car to match the current order
                     # --------------------------------------
                     for vehicle in now_area.idle_vehicles:
-                        tmp___road_cost = self.__road_cost(
-                            vehicle.location_node, self.now_order.pick_up_point
+                        tmp_road_cost = self.__road_cost(
+                            start_node_index=self.node_manager.get_node_index(
+                                vehicle.location_node_id
+                            ),
+                            end_node_index=self.node_manager.get_node_index(
+                                self.now_order.pick_up_node_id
+                            ),
                         )
                         if tmp_min == None:
-                            tmp_min = (vehicle, tmp___road_cost, now_area)
-                        elif tmp___road_cost < tmp_min[1]:
-                            tmp_min = (vehicle, tmp___road_cost, now_area)
+                            tmp_min = (vehicle, tmp_road_cost, now_area)
+                        elif tmp_road_cost < tmp_min[1]:
+                            tmp_min = (vehicle, tmp_road_cost, now_area)
                     # --------------------------------------
                 # Neighbor car search system to increase search range
                 elif self.neighbor_can_server and len(now_area.neighbor):
@@ -1173,8 +956,8 @@ class Simulation(object):
                     )
 
                 # When all Neighbor Cluster without any idle Vehicles
-                if tmp_min == None or tmp_min[1] > PICKUPTIMEWINDOW:
-                    self.reject_num += 1
+                if tmp_min == None or tmp_min[1] > self.pick_up_time_window:
+                    self.static_service.increment_reject_num()
                     self.now_order.arrive_info = ArriveInfo.REJECT
                 # Successfully matched a vehicle
                 else:
@@ -1182,27 +965,40 @@ class Simulation(object):
                     self.now_order.pick_up_wait_time = tmp_min[1]
                     now_vehicle.orders.append(self.now_order)
 
-                    self.totally_wait_time += self.__road_cost(
-                        now_vehicle.location_node, self.now_order.pick_up_point
+                    self.static_service.add_totally_wait_time(
+                        self.__road_cost(
+                            start_node_index=self.node_manager.get_node_index(
+                                now_vehicle.location_node_id
+                            ),
+                            end_node_index=self.node_manager.get_node_index(
+                                self.now_order.pick_up_node_id
+                            ),
+                        )
                     )
 
                     schedule_cost = self.__road_cost(
-                        now_vehicle.location_node, self.now_order.pick_up_point
+                        start_node_index=self.node_manager.get_node_index(
+                            now_vehicle.location_node_id
+                        ),
+                        end_node_index=self.node_manager.get_node_index(
+                            self.now_order.pick_up_node_id
+                        ),
                     ) + self.__road_cost(
-                        self.now_order.pick_up_point, self.now_order.delivery_point
+                        start_node_index=self.node_manager.get_node_index(
+                            self.now_order.pick_up_node_id
+                        ),
+                        end_node_index=self.node_manager.get_node_index(
+                            self.now_order.delivery_node_id
+                        ),
                     )
 
                     # Add a destination to the current vehicle
-                    now_vehicle.delivery_point = self.now_order.delivery_point
+                    now_vehicle.delivery_node_id = self.now_order.delivery_node_id
 
                     # Delivery Cluster {Vehicle:ArriveTime}
                     self.areas[
-                        self.node_id_to_area[self.now_order.delivery_point].id
-                    ].vehicles_arrive_time[
-                        now_vehicle
-                    ] = self.real_exp_time + np.timedelta64(
-                        schedule_cost * MINUTES
-                    )
+                        self.node_id_to_area[self.now_order.delivery_node_id].id
+                    ].vehicles_arrive_time[now_vehicle] = self.real_exp_time + np.timedelta64(schedule_cost * self.minutes)
 
                     # delete now Cluster's recode about now Vehicle
                     tmp_min[2].idle_vehicles.remove(now_vehicle)
@@ -1210,7 +1006,7 @@ class Simulation(object):
                     self.now_order.arrive_info = ArriveInfo.SUCCESS
             else:
                 # None available idle Vehicles
-                self.reject_num += 1
+                self.static_service.increment_reject_num()
                 self.now_order.arrive_info = ArriveInfo.REJECT
 
             # The current order has been processed and start processing the next order
@@ -1228,13 +1024,18 @@ class Simulation(object):
 
         visit_list[area.id] = True
         for vehicle in area.idle_vehicles:
-            tmp___road_cost = self.__road_cost(
-                vehicle.location_node, self.now_order.pick_up_point
+            tmp_road_cost = self.__road_cost(
+                start_node_index=self.node_manager.get_node_index(
+                    vehicle.location_node_id
+                ),
+                end_node_index=self.node_manager.get_node_index(
+                    self.now_order.pick_up_node_id
+                ),
             )
             if tmp_min == None:
-                tmp_min = (vehicle, tmp___road_cost, area)
-            elif tmp___road_cost < tmp_min[1]:
-                tmp_min = (vehicle, tmp___road_cost, area)
+                tmp_min = (vehicle, tmp_road_cost, area)
+            elif tmp_road_cost < tmp_min[1]:
+                tmp_min = (vehicle, tmp_road_cost, area)
 
         if self.neighbor_can_server:
             for j in area.neighbor:
@@ -1283,7 +1084,6 @@ class Simulation(object):
     def __learning_function(self) -> None:
         return
 
-
     def __call__(self) -> None:
         self.real_exp_time = self.orders[0].release_time - self.time_periods
 
@@ -1300,19 +1100,25 @@ class Simulation(object):
 
             step_update_start_time = datetime.datetime.now()
             self.__update_function()
-            self.totally_update_time += datetime.datetime.now() - step_update_start_time
+            self.static_service.add_totally_update_time(
+                datetime.datetime.now() - step_update_start_time
+            )
 
             step_match_start_time = datetime.datetime.now()
             self.__match_function()
-            self.totally_match_time += datetime.datetime.now() - step_match_start_time
+            self.static_service.add_totally_match_time(
+                datetime.datetime.now() - step_match_start_time
+            )
 
             step_reward_start_time = datetime.datetime.now()
             self.__reward_function()
-            self.totally_reward_time += datetime.datetime.now() - step_reward_start_time
+            self.static_service.add_totally_reward_time(
+                datetime.datetime.now() - step_reward_start_time
+            )
 
             step_next_state_start_time = datetime.datetime.now()
             self.__get_next_state_function()
-            self.totally_next_state_time += (
+            self.static_service.add_totally_next_state_time(
                 datetime.datetime.now() - step_next_state_start_time
             )
             for area in self.areas:
@@ -1320,12 +1126,14 @@ class Simulation(object):
 
             step_learning_start_time = datetime.datetime.now()
             self.__learning_function()
-            self.totally_learning_time += datetime.datetime.now() - step_learning_start_time
+            self.static_service.add_totally_learning_time(
+                datetime.datetime.now() - step_learning_start_time
+            )
 
             step_demand_predict_start_time = datetime.datetime.now()
             self.__demand_predict_function()
             self.__supply_expect_function()
-            self.totally_demand_predict_time += (
+            self.static_service.add_totally_demand_predict_time(
                 datetime.datetime.now() - step_demand_predict_start_time
             )
 
@@ -1334,7 +1142,9 @@ class Simulation(object):
                 area.per_dispatch_idle_vehicles = len(area.idle_vehicles)
             step_dispatch_start_time = datetime.datetime.now()
             self.__dispatch_function()
-            self.totally_dispatch_time += datetime.datetime.now() - step_dispatch_start_time
+            self.static_service.add_totally_dispatch_time(
+                datetime.datetime.now() - step_dispatch_start_time
+            )
             # Count the number of idle vehicles after Dispatch
             for area in self.areas:
                 area.later_dispatch_idle_vehicles = len(area.idle_vehicles)
@@ -1355,9 +1165,9 @@ class Simulation(object):
         # ------------------------------------------------
         print("Experiment over")
         print(f"Episode: {self.episode}")
-        print(f"Clusting mode: {self.area_mode}")
-        print(f"Demand Prediction mode: {self.demand_prediction_mode}")
-        print(f"Dispatch mode: {self.dispatch_mode}")
+        print(f"Clusting mode: {self.area_mode.value}")
+        print(f"Demand Prediction mode: {self.demand_prediction_mode.value}")
+        print(f"Dispatch mode: {self.dispatch_mode.value}")
         print(
             "Date: "
             + str(self.orders[0].release_time.month)
@@ -1374,23 +1184,96 @@ class Simulation(object):
             print("Number of Grids: " + str(self.num_areas))
         print("Number of Vehicles: " + str(len(self.vehicles)))
         print("Number of Orders: " + str(len(self.orders)))
-        print("Number of Reject: " + str(self.reject_num))
-        print("Number of Dispatch: " + str(self.dispatch_num))
-        if (self.dispatch_num) != 0:
+        print("Number of Reject: " + str(self.static_service.reject_num))
+        print("Number of Dispatch: " + str(self.static_service.dispatch_num))
+        if (self.static_service.dispatch_num) != 0:
             print(
                 "Average Dispatch Cost: "
-                + str(self.totally_dispatch_cost / self.dispatch_num)
+                + str(
+                    self.static_service.totally_dispatch_cost
+                    / self.static_service.dispatch_num
+                )
             )
-        if (len(self.orders) - self.reject_num) != 0:
+        if (len(self.orders) - self.static_service.reject_num) != 0:
             print(
                 "Average wait time: "
-                + str(self.totally_wait_time / (len(self.orders) - self.reject_num))
+                + str(
+                    self.static_service.totally_wait_time
+                    / (len(self.orders) - self.static_service.reject_num)
+                )
             )
         print("Totally Order value: " + str(sum_order_value))
-        print("Totally Update Time : " + str(self.totally_update_time))
-        print("Totally NextState Time : " + str(self.totally_next_state_time))
-        print("Totally Learning Time : " + str(self.totally_learning_time))
-        print("Totally Demand Predict Time : " + str(self.totally_demand_predict_time))
-        print("Totally Dispatch Time : " + str(self.totally_dispatch_time))
-        print("Totally Simulation Time : " + str(self.totally_match_time))
+        print("Totally Update Time : " + str(self.static_service.totally_update_time))
+        print(
+            "Totally NextState Time : "
+            + str(self.static_service.totally_next_state_time)
+        )
+        print(
+            "Totally Learning Time : " + str(self.static_service.totally_learning_time)
+        )
+        print(
+            "Totally Demand Predict Time : "
+            + str(self.static_service.totally_demand_predict_time)
+        )
+        print(
+            "Totally Dispatch Time : " + str(self.static_service.totally_dispatch_time)
+        )
+        print(
+            "Totally Simulation Time : " + str(self.static_service.totally_match_time)
+        )
         print("Episode Run time : " + str(episode_end_time - episode_start_time))
+
+
+"""
+Experiment over
+Episode: 0
+Clusting mode: AreaMode.GRID
+Demand Prediction mode: DemandPredictionMode.TRAINING
+Dispatch mode: Simulation
+Date: 6/1
+Weekend or Workday: Workday
+Number of Grids: 1
+Number of Vehicles: 6000
+Number of Orders: 130
+Number of Reject: 0
+Number of Dispatch: 0
+Average wait time: 0.0
+Totally Order value: 263
+Totally Update Time : 0:00:00.000383
+Totally NextState Time : 0:00:00.000068
+Totally Learning Time : 0:00:00.000053
+Totally Demand Predict Time : 0:00:00.000438
+Totally Dispatch Time : 0:00:00.000064
+Totally Simulation Time : 0:00:02.311889
+Episode Run time : 0:00:02.313628
+
+(Pdb) self.areas[0].nodes[:5]
+[(0, (-74.0151098, 40.706165)), (1, (-74.015079, 40.7062557)), (2, (-74.0150681, 40.7062526)), (3, (-74.0154267, 40.7082794)), (4, (-74.0155846, 40.7078839))]
+
+
+"""
+
+"""
+Experiment over
+Episode: 0
+Clusting mode: AreaMode.GRID
+Demand Prediction mode: DemandPredictionMode.TRAINING
+Dispatch mode: DispatchMode.RANDOM
+Date: 6/1
+Weekend or Workday: Workday
+Number of Grids: 9
+Number of Vehicles: 6000
+Number of Orders: 130
+Number of Reject: 0
+Number of Dispatch: 161224
+Average Dispatch Cost: 0.0
+Average wait time: 0.0
+Totally Order value: 263
+Totally Update Time : 0:00:00.000608
+Totally NextState Time : 0:00:00.000064
+Totally Learning Time : 0:00:00.000062
+Totally Demand Predict Time : 0:00:00.000614
+Totally Dispatch Time : 0:00:00.402556
+Totally Simulation Time : 0:00:00.052443
+Episode Run time : 0:00:00.457505
+"""

@@ -1,58 +1,57 @@
-from dataclasses import dataclass
-from typing import List, Mapping, Tuple
+from typing import Any, List
 
+import numpy as np
 import pandas as pd
 
-from domain.local_region_bound import LocalRegionBound
 
-
-@dataclass
 class Node:
-    id: int
-    longitude: float
-    latitude: float
+    def __init__(self, id: int, longitude: float, latitude: float):
+        self.id: int = id
+        self.longitude: float = longitude
+        self.latitude: float = latitude
+
+    def __eq__(self, other: Any):
+        if isinstance(other) == Node:
+            return False
+        if other.id != self.id:
+            return False
+        return True
 
 
 class NodeManager:
-    def __init__(self, node_df: pd.DataFrame):
-        self.__node_list: List[Node] = [
+    def __init__(self, node_df: pd.DataFrame) -> None:
+        self.__node_list = [
             Node(
-                id=row["ID"],
-                longitude=round(row["longitude"], 7),
-                latitude=round(row["latitude"], 7)
+                id=row["NodeID"],
+                longitude=row["Longitude"],
+                latitude=row["Latitude"],
             )
-            for row in node_df.iterrows()
+            for _, row in node_df.iterrows()
         ]
+        self.__node_index = {node.id: idx for idx, node in enumerate(self.__node_list)}
+        self.__node_dict = {node.id: node for node in self.__node_list}
 
     @property
-    def node_id_list(self) -> List[int]:
-        return [node.id for node in self.__node_list]
+    def node_locations(self) -> np.ndarray:
+        return np.array(
+            [
+                [round(node.longitude, 7), round(node.latitude, 7)]
+                for node in self.__node_list
+            ]
+        )
 
     @property
-    def node_location(self) -> List[List[float]]:
-        return [[node.longitude, node.latitude] for node in self.__node_list] 
+    def node_id_list(self) -> np.ndarray:
+        return np.array([node.id for node in self.__node_list])
 
-    def restrict_area(self, local_region_bound: LocalRegionBound) -> None:
-        tmp_node_list = []
-        for node in self.__node_list:
-            if self.__is_node_in_limit_region(local_region_bound, node):
-                tmp_node_list.append(node)
-        self.__node_list = tmp_node_list
+    def get_nodes(self) -> List[Node]:
+        return [node for node in self.__node_list]
 
-    def __len__(self):
+    def get_node_index(self, node_id: int) -> int:
+        return self.__node_index[node_id]
+
+    def get_node(self, node_id) -> Node:
+        return self.__node_dict[node_id]
+
+    def __len__(self) -> int:
         return len(self.__node_list)
-
-    @classmethod
-    def __is_node_in_limit_region(cls, local_region_bound: LocalRegionBound, node: Node) -> bool:
-        if (
-            node.longitude < local_region_bound.west_bound
-            or node.longitude > local_region_bound.east_bound
-        ):
-            return False
-        elif (
-            node.latitude < local_region_bound.south_bound
-            or node.latitude > local_region_bound.north_bound
-        ):
-            return False
-
-        return True

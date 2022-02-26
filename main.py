@@ -1,30 +1,21 @@
-from util import DataModule
-from config.setting import (
-    TIMESTEP,
-    NELGHBOR_CAN_SERVER,
-    FOCUS_ON_LOCAL_REGION,
-    LOCAL_REGION_BOUND,
-    VEHICLES_NUMBER,
-    SIDE_LENGTH_METER,
-    VEHICLE_SERVICE_METER,
-    DISPATCH_MODE,
-    DEMAND_PREDICTION_MODE,
-    AREA_MODE,
-)
+from config import Config
 from simulator.simulator import Simulation
+from util import DataModule
 
 if __name__ == "__main__":
+    config = Config.load()
     simulator = Simulation(
-        area_mode=AREA_MODE,
-        demand_prediction_mode=DEMAND_PREDICTION_MODE,
-        dispatch_mode=DISPATCH_MODE,
-        vehicles_number=VEHICLES_NUMBER,
-        time_periods=TIMESTEP,
-        local_region_bound=LOCAL_REGION_BOUND,
-        side_length_meter=SIDE_LENGTH_METER,
-        vehicles_server_meter=VEHICLE_SERVICE_METER,
-        neighbor_can_server=NELGHBOR_CAN_SERVER,
-        focus_on_local_region=FOCUS_ON_LOCAL_REGION,
+        area_mode=config.AREA_MODE,
+        demand_prediction_mode=config.DEMAND_PREDICTION_MODE,
+        dispatch_mode=config.DISPATCH_MODE,
+        vehicles_number=config.VEHICLES_NUMBER,
+        time_periods=config.TIMESTEP,
+        local_region_bound=config.LOCAL_REGION_BOUND,
+        side_length_meter=config.SIDE_LENGTH_KIRO_METER,
+        vehicles_server_meter=config.VEHICLE_SERVICE_KIRO_METER,
+        neighbor_can_server=config.NELGHBOR_CAN_SERVER,
+        minutes=config.MINUTES,
+        pick_up_time_window=config.PICKUPTIMEWINDOW
     )
 
     date_module = DataModule()
