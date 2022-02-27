@@ -1,8 +1,9 @@
+from collections import namedtuple
 import datetime
 import os
 import random
 from pathlib import Path
-from typing import List, Mapping, Optional
+from typing import List, Mapping, NamedTuple, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -19,6 +20,7 @@ from domain import (
 from modules import DispatchModuleInterface, StaticsService
 from modules.dispatch import RandomDispatch
 from objects import Area, Cluster, Grid, NodeManager, Order, Vehicle
+from objects.order import OrderManager
 from preprocessing.readfiles import read_all_files, read_map, read_order
 from util import haversine
 
@@ -71,9 +73,10 @@ class Simulation(object):
         )
         self.demand_predictor_module = None
         self.node_manager: NodeManager = None
+        self.order_manager: OrderManager = None
 
         # Statistical variables
-        self.static_service = StaticsService()
+        self.static_service: StaticsService = StaticsService()
 
         # Data variable
         self.areas: List[Area] = None
@@ -82,10 +85,9 @@ class Simulation(object):
         self.__cost_map: np.ndarray = None
         self.node_id_to_area: Mapping[int, Area] = {}
         self.transition_temp_prool: List = []
-        self.minutes = minutes
-        self.pick_up_time_window = pick_up_time_window
-
-        self.local_region_bound = local_region_bound
+        self.minutes: int = minutes
+        self.pick_up_time_window: np.float64 = pick_up_time_window
+        self.local_region_bound: LocalRegionBound = local_region_bound
 
         # Weather data
         # TODO: MUST CHANGE
@@ -118,20 +120,26 @@ class Simulation(object):
         self.time_periods: np.timedelta64 = time_periods
         self.side_length_meter: int = side_length_meter
         self.vehicle_service_meter: int = vehicles_server_meter
-        self.num_grid_width: int = None
-        self.num_grid_height: int = None
-        self.neighbor_server_deep_limit = None
+        (
+            self.num_grid_width,
+            self.num_grid_height,
+            self.neighbor_server_deep_limit,
+        ) = self.__calculate_the_scale_of_devision()
+        print("----------------------------")
+        print("The width of each grid", self.side_length_meter, "km")
+        print("Vehicle service range", self.vehicle_service_meter, "km")
+        print("Number of grids in east-west direction", self.num_grid_width)
+        print("Number of grids in north-south direction", self.num_grid_height)
+        print("Number of grids", self.num_areas)
+        print("----------------------------")
 
         # Control variable
         self.neighbor_can_server = neighbor_can_server
 
         # Process variable
-        self.real_exp_time = None
-        self.now_order = None
+        self.real_time_in_experiment = None
         self.step = None
         self.episode = 0
-
-        self.__calculate_the_scale_of_devision()
 
         # Demand predictor variable
         self.demand_prediction_mode: DemandPredictionMode = demand_prediction_mode
@@ -184,11 +192,18 @@ class Simulation(object):
         (
             node_df,
             self.node_id_list,
-            orders_df,
+            order_df,
             vehicles,
             self.__cost_map,
         ) = read_all_files(order_file_date, self.demand_prediction_mode)
+
+        print("Create Nodes")
         self.node_manager = NodeManager(node_df)
+        print("Create Orders set")
+        self.order_manager = OrderManager(
+            order_df=order_df, 
+            pick_up_time_window=self.pick_up_time_window,
+        )
 
         if self.area_mode == AreaMode.CLUSTER:
             print("Create Clusters")
@@ -203,26 +218,11 @@ class Simulation(object):
                     if node_id == node.id:
                         self.node_id_to_area[node_id] = area
 
-        print("Create Orders set")
-        self.orders: List[Order] = [
-            Order(
-                id=order_row["ID"],
-                release_time=order_row["Start_time"],
-                pick_up_node_id=order_row["NodeS"],
-                delivery_node_id=order_row["NodeE"],
-                pick_up_time_window=order_row["Start_time"] + self.pick_up_time_window,
-                pick_up_wait_time=None,
-                arrive_info=None,
-                order_value=None,
-            )
-            for _, order_row in orders_df.iterrows()
-        ]
-
         # Calculate the value of all orders in advance
         # -------------------------------
         print("Pre-calculated order value")
-        for each_order in self.orders:
-            each_order.order_value = self.__road_cost(
+        for idx, each_order in enumerate(self.order_manager.get_orders()):
+            cost = self.__road_cost(
                 start_node_index=self.node_manager.get_node_index(
                     each_order.pick_up_node_id
                 ),
@@ -230,6 +230,7 @@ class Simulation(object):
                     each_order.delivery_node_id
                 ),
             )
+            self.order_manager.set_order_cost(idx=idx, cost=cost)
         # -------------------------------
 
         # Select number of vehicles
@@ -261,11 +262,10 @@ class Simulation(object):
 
         self.static_service.reset()
 
-        self.orders = None
+        self.order_manager.reset()
         self.transition_temp_prool.clear()
 
-        self.real_exp_time = None
-        self.now_order = None
+        self.real_time_in_experiment = None
         self.step = None
 
         # read orders
@@ -279,30 +279,15 @@ class Simulation(object):
             / directory
             / f"order_2016{str(order_file_date)}.csv"
         )
-        self.orders = [
-            Order(
-                id=order_row["ID"],
-                release_time=order_row["Start_time"],
-                pick_up_node_id=order_row["NodeS"],
-                delivery_node_id=order_row["NodeE"],
-                pick_up_time_window=order_row[1] + self.pick_up_time_window,
-                pick_up_wait_time=None,
-                arrive_info=None,
-                order_value=None,
-            )
-            for _, order_row in order_df.iterrows()
-        ]
-
-        # Rename orders'ID
-        # -------------------------------
-        for i in range(len(self.orders)):
-            self.orders[i].id = i
-        # -------------------------------
+        self.order_manager.reload(
+            order_df=order_df,
+            pick_up_time_window=self.pick_up_time_window,
+        )
 
         # Calculate the value of all orders in advance
         # -------------------------------
-        for each_order in self.orders:
-            each_order.order_value = self.__road_cost(
+        for idx, each_order in enumerate(self.order_manager.get_orders()):
+            cost = self.__road_cost(
                 start_node_index=self.node_manager.get_node_index(
                     each_order.pick_up_node_id
                 ),
@@ -310,6 +295,7 @@ class Simulation(object):
                     each_order.delivery_node_id
                 ),
             )
+            self.order_manager.set_order_cost(idx=idx, cost=cost)
         # -------------------------------
 
         # Reset the areas and Vehicles
@@ -331,14 +317,12 @@ class Simulation(object):
         self.static_service.reset()
 
         self.transition_temp_prool.clear()
-        self.real_exp_time = None
-        self.now_order = None
+        self.real_time_in_experiment = None
         self.step = None
 
         # Reset the Orders and Clusters and Vehicles
         # -------------------------------
-        for order in self.orders:
-            order.reset()
+        self.order_manager.reset()
 
         for area in self.areas:
             area.reset()
@@ -358,20 +342,24 @@ class Simulation(object):
             vehicle.area = self.node_id_to_area[random_node.id]
             vehicle.area.idle_vehicles.append(vehicle)
 
-    def __load_dispatch_component(self, dispatch_mode: DispatchMode) -> DispatchModuleInterface:
+    def __load_dispatch_component(
+        self, dispatch_mode: DispatchMode
+    ) -> Optional[DispatchModuleInterface]:
         if dispatch_mode == DispatchMode.RANDOM:
             dispatch_module = RandomDispatch()
-        return dispatch_module
+            return dispatch_module
+        elif dispatch_mode == DispatchMode.NOT_DISPATCH:
+            return None
 
     def __road_cost(self, start_node_index: int, end_node_index: int) -> int:
         return int(self.__cost_map[start_node_index][end_node_index])
 
-    def __calculate_the_scale_of_devision(self) -> None:
+    def __calculate_the_scale_of_devision(self) -> Tuple[int, int, int]:
 
         average_longitude = (self.map_east_bound - self.map_west_bound) / 2
         average_latitude = (self.map_north_bound - self.map_south_bound) / 2
 
-        self.num_grid_width = int(
+        num_grid_width = int(
             haversine(
                 self.map_west_bound,
                 average_latitude,
@@ -381,7 +369,7 @@ class Simulation(object):
             / self.side_length_meter
             + 1
         )
-        self.num_grid_height = int(
+        num_grid_height = int(
             haversine(
                 average_longitude,
                 self.map_south_bound,
@@ -392,26 +380,13 @@ class Simulation(object):
             + 1
         )
 
-        self.neighbor_server_deep_limit = int(
+        neighbor_server_deep_limit = int(
             (self.vehicle_service_meter - (0.5 * self.side_length_meter))
             // self.side_length_meter
         )
 
-        print("----------------------------")
-        print("The width of each grid", self.side_length_meter, "meters")
-        print("Vehicle service range", self.vehicle_service_meter, "meters")
-        print("Number of grids in east-west direction", self.num_grid_width)
-        print("Number of grids in north-south direction", self.num_grid_height)
-        print("Number of grids", self.num_areas)
-        print("----------------------------")
+        return num_grid_width, num_grid_height, neighbor_server_deep_limit
 
-    def __is_order_in_limit_region(self, order: Order) -> bool:
-        if not order.pick_up_node_id in self.node_id_list:
-            return False
-        if not order.delivery_node_id in self.node_id_list:
-            return False
-
-        return True
 
     def __create_grid(self) -> List[Area]:
         node_id_list = self.node_manager.node_id_list
@@ -502,26 +477,7 @@ class Simulation(object):
                 grid.neighbor.append(all_grid[grid.id + self.num_grid_width + 1])
             if right_down_neighbor:
                 grid.neighbor.append(all_grid[grid.id - self.num_grid_width + 1])
-            # ----------------------------
 
-        # You can draw every grid(red) and neighbor(random color) here
-        # ----------------------------------------------
-        """
-        for i in range(len(AllGrid)):
-            print("Grid ID ",i,AllGrid[i])
-            print(AllGrid[i].neighbor)
-            self.draw_one_cluster(Cluster = AllGrid[i],random = False,show = False)
-            
-            for j in AllGrid[i].neighbor:
-                if j.id == AllGrid[i].id :
-                    continue
-                print(j.id)
-                self.draw_one_cluster(Cluster = j,random = True,show = False)
-            plt.xlim(104.007, 104.13)
-            plt.ylim(30.6119, 30.7092)
-            plt.show()
-        """
-        # ----------------------------------------------
         return all_grid
 
     def __create_cluster(self) -> List[Area]:
@@ -653,24 +609,6 @@ class Simulation(object):
                     continue
         del id_to_cluster
 
-        # You can draw every cluster(red) and neighbor(random color) here
-        # ----------------------------------------------
-        """
-        for i in range(len(Clusters)):
-            print("Cluster ID ",i,Clusters[i])
-            print(Clusters[i].neighbor)
-            self.draw_one_cluster(Cluster = Clusters[i],random = False,show = False)
-            for j in Clusters[i].neighbor:
-                if j.id == Clusters[i].id :
-                    continue
-                print(j.id)
-                self.draw_one_cluster(Cluster = j,random = True,show = False)
-            plt.xlim(104.007, 104.13)
-            plt.ylim(30.6119, 30.7092)
-            plt.show()
-        """
-        # ----------------------------------------------
-
         return clusters
 
     def __load_demand_prediction(self):
@@ -712,7 +650,376 @@ class Simulation(object):
 
         return np.array(result)
 
-    # Visualization tools
+    ############################################################################
+
+    # The main modules
+    # ---------------------------------------------------------------------------
+    def __demand_predict_function(self) -> None:
+        """
+        Here you can implement your own order forecasting method
+        to provide efficient and accurate help for Dispatch method
+        """
+        return
+
+    def __supply_expect_function(self) -> None:
+        """
+        Calculate the number of idle Vehicles in the next time slot
+        of each cluster due to the completion of the order
+        """
+        self.supply_expect = np.zeros(self.num_areas)
+        for area in self.areas:
+            for vehicle, time in list(area.vehicles_arrive_time.items()):
+                # key = Vehicle ; value = Arrivetime
+                if (
+                    time <= self.real_time_in_experiment + self.time_periods
+                    and len(vehicle.orders) > 0
+                ):
+                    self.supply_expect[area.id] += 1
+
+    def __dispatch_function(self) -> None:
+        """
+        Here you can implement your own Dispatch method to
+        move idle vehicles in each cluster to other clusters
+        """
+        if self.dispatch_mode == DispatchMode.RANDOM:
+            for area in self.areas:
+                for vehicles in area.idle_vehicles:
+                    start_node_id, next_node_id, = self.dispatch_module(vehicles)
+                    if start_node_id != next_node_id:
+                        self.static_service.increment_dispatch_num()
+                        dispatch_cost = self.__road_cost(
+                            self.node_manager.get_node_index(start_node_id),
+                            self.node_manager.get_node_index(next_node_id),
+                        )
+                        self.static_service.add_dispatch_cost(dispatch_cost)
+        elif self.dispatch_mode == DispatchMode.NOT_DISPATCH:
+            pass
+
+    def __match_function(self) -> None:
+        """
+        Each matching module will match the orders that will occur within the current time slot.
+        The matching module will find the nearest idle vehicles for each order. It can also enable
+        the neighbor car search system to determine the search range according to the set search distance
+        and the size of the grid. It use dfs to find the nearest idle vehicles in the area.
+        """
+        # Count the number of idle vehicles before matching
+        for area in self.areas:
+            area.per_match_idle_vehicles = len(area.idle_vehicles)
+
+        while self.order_manager.now_order.order_time < self.real_time_in_experiment + self.time_periods:
+
+            if not self.order_manager.has_next:
+                break
+
+            self.static_service.increment_order_num()
+            order_occurred_area: Area = self.node_id_to_area[self.order_manager.now_order.pick_up_node_id]
+            order_occurred_area.orders.append(self.order_manager.now_order)
+
+            if len(order_occurred_area.idle_vehicles) or len(order_occurred_area.neighbor):
+                MatchedInfo = namedtuple("MatchedInfo", ["matched_vehicle", "road_cost", "order_occurred_area"])
+                matched_info = None
+
+                if len(order_occurred_area.idle_vehicles):
+
+                    # Find a nearest car to match the current order
+                    # --------------------------------------
+                    for vehicle in order_occurred_area.idle_vehicles:
+                        tmp_road_cost = self.__road_cost(
+                            start_node_index=self.node_manager.get_node_index(
+                                vehicle.location_node_id
+                            ),
+                            end_node_index=self.node_manager.get_node_index(
+                                self.order_manager.now_order.pick_up_node_id
+                            ),
+                        )
+                        if matched_info is None:
+                            matched_info = MatchedInfo(vehicle, tmp_road_cost, order_occurred_area)
+                        elif tmp_road_cost < matched_info.road_cost:
+                            matched_info = MatchedInfo(vehicle, tmp_road_cost, order_occurred_area)
+                    # --------------------------------------
+                # Neighbor car search system to increase search range
+                elif self.neighbor_can_server and len(order_occurred_area.neighbor):
+                    matched_vehicle, road_cost, order_occurred_area = self.__find_server_vehicle_function(
+                        neighbor_server_deep_limit=self.neighbor_server_deep_limit,
+                        visit_list={},
+                        area=order_occurred_area,
+                        tmp_min=None,
+                        deep=0,
+                    )
+                    matched_info = MatchedInfo(matched_vehicle, road_cost, order_occurred_area)
+                
+                # When all Neighbor Cluster without any idle Vehicles
+                if matched_info is None or matched_info.road_cost > self.pick_up_time_window:
+                    self.static_service.increment_reject_num()
+                    self.order_manager.now_order.set_arrive_info(ArriveInfo.REJECT)
+                # Successfully matched a vehicle
+                else:
+                    matched_vehicle: Vehicle = matched_info.matched_vehicle
+                    road_cost: int = matched_info.road_cost
+                    order_occurred_area: Area = matched_info.order_occurred_area
+                    self.order_manager.now_order.pick_up_wait_time = road_cost
+                    matched_vehicle.orders.append(self.order_manager.now_order)
+
+                    self.static_service.add_wait_time(
+                        self.__road_cost(
+                            start_node_index=self.node_manager.get_node_index(
+                                matched_vehicle.location_node_id
+                            ),
+                            end_node_index=self.node_manager.get_node_index(
+                                self.order_manager.now_order.pick_up_node_id
+                            ),
+                        )
+                    )
+
+                    schedule_cost = self.__road_cost(
+                        start_node_index=self.node_manager.get_node_index(
+                            matched_vehicle.location_node_id
+                        ),
+                        end_node_index=self.node_manager.get_node_index(
+                            self.order_manager.now_order.pick_up_node_id
+                        ),
+                    ) + self.__road_cost(
+                        start_node_index=self.node_manager.get_node_index(
+                            self.order_manager.now_order.pick_up_node_id
+                        ),
+                        end_node_index=self.node_manager.get_node_index(
+                            self.order_manager.now_order.delivery_node_id
+                        ),
+                    )
+
+                    # Add a destination to the current vehicle
+                    matched_vehicle.delivery_node_id = self.order_manager.now_order.delivery_node_id
+
+                    # Delivery Cluster {Vehicle:ArriveTime}
+                    self.areas[
+                        self.node_id_to_area[self.order_manager.now_order.delivery_node_id].id
+                    ].vehicles_arrive_time[
+                        matched_vehicle
+                    ] = self.real_time_in_experiment + np.timedelta64(
+                        schedule_cost * self.minutes
+                    )
+
+                    # delete now Cluster's recode about now Vehicle
+                    order_occurred_area.idle_vehicles.remove(matched_vehicle)
+                    self.order_manager.now_order.set_arrive_info(ArriveInfo.SUCCESS)
+            else:
+                # None available idle Vehicles
+                self.static_service.increment_reject_num()
+                self.order_manager.now_order.set_arrive_info(ArriveInfo.REJECT)
+
+            # The current order has been processed and start processing the next order
+            # ------------------------------
+            # breakpoint()
+            self.order_manager.increment()
+
+    def __find_server_vehicle_function(
+        self, neighbor_server_deep_limit, visit_list, area: Area, tmp_min, deep
+    ):
+        """
+        Use dfs visit neighbors and find nearest idle Vehicle
+        """
+        if deep > neighbor_server_deep_limit or area.id in visit_list:
+            return tmp_min
+
+        visit_list[area.id] = True
+        for vehicle in area.idle_vehicles:
+            tmp_road_cost = self.__road_cost(
+                start_node_index=self.node_manager.get_node_index(
+                    vehicle.location_node_id
+                ),
+                end_node_index=self.node_manager.get_node_index(
+                    self.order_manager.now_order.pick_up_node_id
+                ),
+            )
+            if tmp_min == None:
+                tmp_min = (vehicle, tmp_road_cost, area)
+            elif tmp_road_cost < tmp_min[1]:
+                tmp_min = (vehicle, tmp_road_cost, area)
+
+        if self.neighbor_can_server:
+            for j in area.neighbor:
+                tmp_min = self.__find_server_vehicle_function(
+                    neighbor_server_deep_limit,
+                    visit_list,
+                    j,
+                    tmp_min,
+                    deep + 1,
+                )
+        return tmp_min
+
+    def __reward_function(self) -> None:
+        """
+        When apply Dispatch with Reinforcement learning
+        you need to implement your reward function here
+        """
+        return
+
+    def __update_function(self) -> None:
+        """
+        Each time slot update Function will update each cluster
+        in the simulator, processing orders and vehicles
+        """
+        for area in self.areas:
+            # Records array of orders cleared for the last time slot
+            area.orders.clear()
+            for vehicle, time in list(area.vehicles_arrive_time.items()):
+                if time <= self.real_time_in_experiment:
+                    # update Vehicle info
+                    vehicle.arrive_vehicle_update(area)
+                    # update Cluster record
+                    area.arrive_cluster_update(vehicle)
+
+    def __get_next_state_function(self) -> None:
+        """
+        When apply Dispatch with Reinforcement learning
+        you need to implement your next State function here
+        """
+        return
+
+    def __learning_function(self) -> None:
+        return
+
+    def __call__(self) -> None:
+        self.real_time_in_experiment = self.order_manager.farst_order_start_time - self.time_periods
+        end_time: datetime.datetime = self.order_manager.last_order_start_time + 3 * self.time_periods
+        self.step = 0
+
+        __episode_start_time = datetime.datetime.now()
+        print("Start experiment")
+        print("----------------------------")
+        while self.real_time_in_experiment <= end_time:
+
+            __step_update_start_time = datetime.datetime.now()
+            self.__update_function()
+            self.static_service.add_update_time(
+                datetime.datetime.now() - __step_update_start_time
+            )
+
+            __step_match_start_time = datetime.datetime.now()
+            self.__match_function()
+            self.static_service.add_match_time(
+                datetime.datetime.now() - __step_match_start_time
+            )
+
+            __step_reward_start_time = datetime.datetime.now()
+            self.__reward_function()
+            self.static_service.add_reward_time(
+                datetime.datetime.now() - __step_reward_start_time
+            )
+
+            __step_next_state_start_time = datetime.datetime.now()
+            self.__get_next_state_function()
+            self.static_service.add_next_state_time(
+                datetime.datetime.now() - __step_next_state_start_time
+            )
+            for area in self.areas:
+                area.dispatch_number = 0
+
+            __step_learning_start_time = datetime.datetime.now()
+            self.__learning_function()
+            self.static_service.add_learning_time(
+                datetime.datetime.now() - __step_learning_start_time
+            )
+
+            __step_demand_predict_start_time = datetime.datetime.now()
+            self.__demand_predict_function()
+            self.__supply_expect_function()
+            self.static_service.add_demand_predict_time(
+                datetime.datetime.now() - __step_demand_predict_start_time
+            )
+
+            # Count the number of idle vehicles before Dispatch
+            for area in self.areas:
+                area.per_dispatch_idle_vehicles = len(area.idle_vehicles)
+            step_dispatch_start_time = datetime.datetime.now()
+            self.__dispatch_function()
+            self.static_service.add_dispatch_time(
+                datetime.datetime.now() - step_dispatch_start_time
+            )
+            # Count the number of idle vehicles after Dispatch
+            for area in self.areas:
+                area.later_dispatch_idle_vehicles = len(area.idle_vehicles)
+
+            # A time slot is processed
+            self.step += 1
+            self.real_time_in_experiment += self.time_periods
+        # ------------------------------------------------
+        __episode_end_time = datetime.datetime.now()
+
+        sum_order_value = 0
+        order_value_num = 0
+        for order in self.order_manager.get_orders():
+            if order.arrive_info == ArriveInfo.SUCCESS:
+                sum_order_value += order.order_value
+                order_value_num += 1
+
+        # ------------------------------------------------
+        print("Experiment over")
+        print(f"Episode: {self.episode}")
+        print(f"Clusting mode: {self.area_mode.value}")
+        print(f"Demand Prediction mode: {self.demand_prediction_mode.value}")
+        print(f"Dispatch mode: {self.dispatch_mode.value}")
+        print(
+            "Date: "
+            + str(self.order_manager.farst_order_start_time.month)
+            + "/"
+            + str(self.order_manager.farst_order_start_time.day)
+        )
+        print(
+            "Weekend or Workday: "
+            + self.__workday_or_weekend(self.order_manager.farst_order_start_time.weekday())
+        )
+        if self.area_mode == AreaMode.CLUSTER:
+            print("Number of Clusters: " + str(self.num_areas))
+        elif self.area_mode == AreaMode.GRID:
+            print("Number of Grids: " + str(self.num_areas))
+        print("Number of Vehicles: " + str(len(self.vehicles)))
+        print("Number of Orders: " + str(len(self.order_manager)))
+        print("Number of Reject: " + str(self.static_service.reject_num))
+        print("Number of Dispatch: " + str(self.static_service.dispatch_num))
+        if (self.static_service.dispatch_num) != 0:
+            print(
+                "Average Dispatch Cost: "
+                + str(
+                    self.static_service.totally_dispatch_cost
+                    / self.static_service.dispatch_num
+                )
+            )
+        if (len(self.order_manager) - self.static_service.reject_num) != 0:
+            print(
+                "Average wait time: "
+                + str(
+                    self.static_service.totally_wait_time
+                    / (len(self.order_manager) - self.static_service.reject_num)
+                )
+            )
+        print("Totally Order value: " + str(sum_order_value))
+        print("Totally Update Time : " + str(self.static_service.totally_update_time))
+        print(
+            "Totally NextState Time : "
+            + str(self.static_service.totally_next_state_time)
+        )
+        print(
+            "Totally Learning Time : " + str(self.static_service.totally_learning_time)
+        )
+        print(
+            "Totally Demand Predict Time : "
+            + str(self.static_service.totally_demand_predict_time)
+        )
+        print(
+            "Totally Dispatch Time : " + str(self.static_service.totally_dispatch_time)
+        )
+        print(
+            "Totally Simulation Time : " + str(self.static_service.totally_match_time)
+        )
+        print("Episode Run time : " + str(__episode_end_time - __episode_start_time))
+
+        self.static_service.save_stats(
+            date=f"2016{self.order_manager.farst_order_start_time.month}{self.order_manager.farst_order_start_time.day}"
+        )
+
+
+        # Visualization tools
     # -----------------------------------------------
     def randomcolor(self) -> str:
         color_arr = [
@@ -873,367 +1180,6 @@ class Simulation(object):
         else:
             return "Workday"
 
-    ############################################################################
-
-    # The main modules
-    # ---------------------------------------------------------------------------
-    def __demand_predict_function(self) -> None:
-        """
-        Here you can implement your own order forecasting method
-        to provide efficient and accurate help for Dispatch method
-        """
-        return
-
-    def __supply_expect_function(self) -> None:
-        """
-        Calculate the number of idle Vehicles in the next time slot
-        of each cluster due to the completion of the order
-        """
-        self.supply_expect = np.zeros(self.num_areas)
-        for area in self.areas:
-            for vehicle, time in list(area.vehicles_arrive_time.items()):
-                # key = Vehicle ; value = Arrivetime
-                if (
-                    time <= self.real_exp_time + self.time_periods
-                    and len(vehicle.orders) > 0
-                ):
-                    self.supply_expect[area.id] += 1
-
-    def __dispatch_function(self) -> None:
-        """
-        Here you can implement your own Dispatch method to
-        move idle vehicles in each cluster to other clusters
-        """
-        for area in self.areas:
-            for vehicles in area.idle_vehicles:
-                dispatched = self.dispatch_module(vehicles)
-                if dispatched:
-                    self.static_service.increment_dispatch_num()
-
-    def __match_function(self) -> None:
-        """
-        Each matching module will match the orders that will occur within the current time slot.
-        The matching module will find the nearest idle vehicles for each order. It can also enable
-        the neighbor car search system to determine the search range according to the set search distance
-        and the size of the grid. It use dfs to find the nearest idle vehicles in the area.
-        """
-
-        # Count the number of idle vehicles before matching
-        for area in self.areas:
-            area.per_match_idle_vehicles = len(area.idle_vehicles)
-
-        while self.now_order.release_time < self.real_exp_time + self.time_periods:
-
-            if self.now_order.id == self.orders[-1].id:
-                break
-
-            self.static_service.increment_order_num()
-            now_area: Area = self.node_id_to_area[self.now_order.pick_up_node_id]
-            now_area.orders.append(self.now_order)
-
-            if len(now_area.idle_vehicles) or len(now_area.neighbor):
-                tmp_min = None
-
-                if len(now_area.idle_vehicles):
-
-                    # Find a nearest car to match the current order
-                    # --------------------------------------
-                    for vehicle in now_area.idle_vehicles:
-                        tmp_road_cost = self.__road_cost(
-                            start_node_index=self.node_manager.get_node_index(
-                                vehicle.location_node_id
-                            ),
-                            end_node_index=self.node_manager.get_node_index(
-                                self.now_order.pick_up_node_id
-                            ),
-                        )
-                        if tmp_min == None:
-                            tmp_min = (vehicle, tmp_road_cost, now_area)
-                        elif tmp_road_cost < tmp_min[1]:
-                            tmp_min = (vehicle, tmp_road_cost, now_area)
-                    # --------------------------------------
-                # Neighbor car search system to increase search range
-                elif self.neighbor_can_server and len(now_area.neighbor):
-                    tmp_min = self.__find_server_vehicle_function(
-                        neighbor_server_deep_limit=self.neighbor_server_deep_limit,
-                        visit_list={},
-                        area=now_area,
-                        tmp_min=None,
-                        deep=0,
-                    )
-
-                # When all Neighbor Cluster without any idle Vehicles
-                if tmp_min == None or tmp_min[1] > self.pick_up_time_window:
-                    self.static_service.increment_reject_num()
-                    self.now_order.arrive_info = ArriveInfo.REJECT
-                # Successfully matched a vehicle
-                else:
-                    now_vehicle: Vehicle = tmp_min[0]
-                    self.now_order.pick_up_wait_time = tmp_min[1]
-                    now_vehicle.orders.append(self.now_order)
-
-                    self.static_service.add_totally_wait_time(
-                        self.__road_cost(
-                            start_node_index=self.node_manager.get_node_index(
-                                now_vehicle.location_node_id
-                            ),
-                            end_node_index=self.node_manager.get_node_index(
-                                self.now_order.pick_up_node_id
-                            ),
-                        )
-                    )
-
-                    schedule_cost = self.__road_cost(
-                        start_node_index=self.node_manager.get_node_index(
-                            now_vehicle.location_node_id
-                        ),
-                        end_node_index=self.node_manager.get_node_index(
-                            self.now_order.pick_up_node_id
-                        ),
-                    ) + self.__road_cost(
-                        start_node_index=self.node_manager.get_node_index(
-                            self.now_order.pick_up_node_id
-                        ),
-                        end_node_index=self.node_manager.get_node_index(
-                            self.now_order.delivery_node_id
-                        ),
-                    )
-
-                    # Add a destination to the current vehicle
-                    now_vehicle.delivery_node_id = self.now_order.delivery_node_id
-
-                    # Delivery Cluster {Vehicle:ArriveTime}
-                    self.areas[
-                        self.node_id_to_area[self.now_order.delivery_node_id].id
-                    ].vehicles_arrive_time[now_vehicle] = self.real_exp_time + np.timedelta64(schedule_cost * self.minutes)
-
-                    # delete now Cluster's recode about now Vehicle
-                    tmp_min[2].idle_vehicles.remove(now_vehicle)
-
-                    self.now_order.arrive_info = ArriveInfo.SUCCESS
-            else:
-                # None available idle Vehicles
-                self.static_service.increment_reject_num()
-                self.now_order.arrive_info = ArriveInfo.REJECT
-
-            # The current order has been processed and start processing the next order
-            # ------------------------------
-            self.now_order = self.orders[self.now_order.id + 1]
-
-    def __find_server_vehicle_function(
-        self, neighbor_server_deep_limit, visit_list, area: Area, tmp_min, deep
-    ):
-        """
-        Use dfs visit neighbors and find nearest idle Vehicle
-        """
-        if deep > neighbor_server_deep_limit or area.id in visit_list:
-            return tmp_min
-
-        visit_list[area.id] = True
-        for vehicle in area.idle_vehicles:
-            tmp_road_cost = self.__road_cost(
-                start_node_index=self.node_manager.get_node_index(
-                    vehicle.location_node_id
-                ),
-                end_node_index=self.node_manager.get_node_index(
-                    self.now_order.pick_up_node_id
-                ),
-            )
-            if tmp_min == None:
-                tmp_min = (vehicle, tmp_road_cost, area)
-            elif tmp_road_cost < tmp_min[1]:
-                tmp_min = (vehicle, tmp_road_cost, area)
-
-        if self.neighbor_can_server:
-            for j in area.neighbor:
-                tmp_min = self.__find_server_vehicle_function(
-                    neighbor_server_deep_limit,
-                    visit_list,
-                    j,
-                    tmp_min,
-                    deep + 1,
-                )
-        return tmp_min
-
-    def __reward_function(self) -> None:
-        """
-        When apply Dispatch with Reinforcement learning
-        you need to implement your reward function here
-        """
-        return
-
-    def __update_function(self) -> None:
-        """
-        Each time slot update Function will update each cluster
-        in the simulator, processing orders and vehicles
-        """
-        for area in self.areas:
-            # Records array of orders cleared for the last time slot
-            area.orders.clear()
-            for vehicle, time in list(area.vehicles_arrive_time.items()):
-                # key = Vehicle ; value = Arrivetime
-                if time <= self.real_exp_time:
-                    # update Order
-                    if len(vehicle.orders):
-                        vehicle.orders[0].arrive_order_time_record(self.real_exp_time)
-                    # update Vehicle info
-                    vehicle.arrive_vehicle_update(area)
-                    # update Cluster record
-                    area.arrive_cluster_update(vehicle)
-
-    def __get_next_state_function(self) -> None:
-        """
-        When apply Dispatch with Reinforcement learning
-        you need to implement your next State function here
-        """
-        return
-
-    def __learning_function(self) -> None:
-        return
-
-    def __call__(self) -> None:
-        self.real_exp_time = self.orders[0].release_time - self.time_periods
-
-        # To complete running orders
-        end_time = self.orders[-1].release_time + 3 * self.time_periods
-
-        self.now_order = self.orders[0]
-        self.step = 0
-
-        episode_start_time = datetime.datetime.now()
-        print("Start experiment")
-        print("----------------------------")
-        while self.real_exp_time <= end_time:
-
-            step_update_start_time = datetime.datetime.now()
-            self.__update_function()
-            self.static_service.add_totally_update_time(
-                datetime.datetime.now() - step_update_start_time
-            )
-
-            step_match_start_time = datetime.datetime.now()
-            self.__match_function()
-            self.static_service.add_totally_match_time(
-                datetime.datetime.now() - step_match_start_time
-            )
-
-            step_reward_start_time = datetime.datetime.now()
-            self.__reward_function()
-            self.static_service.add_totally_reward_time(
-                datetime.datetime.now() - step_reward_start_time
-            )
-
-            step_next_state_start_time = datetime.datetime.now()
-            self.__get_next_state_function()
-            self.static_service.add_totally_next_state_time(
-                datetime.datetime.now() - step_next_state_start_time
-            )
-            for area in self.areas:
-                area.dispatch_number = 0
-
-            step_learning_start_time = datetime.datetime.now()
-            self.__learning_function()
-            self.static_service.add_totally_learning_time(
-                datetime.datetime.now() - step_learning_start_time
-            )
-
-            step_demand_predict_start_time = datetime.datetime.now()
-            self.__demand_predict_function()
-            self.__supply_expect_function()
-            self.static_service.add_totally_demand_predict_time(
-                datetime.datetime.now() - step_demand_predict_start_time
-            )
-
-            # Count the number of idle vehicles before Dispatch
-            for area in self.areas:
-                area.per_dispatch_idle_vehicles = len(area.idle_vehicles)
-            step_dispatch_start_time = datetime.datetime.now()
-            self.__dispatch_function()
-            self.static_service.add_totally_dispatch_time(
-                datetime.datetime.now() - step_dispatch_start_time
-            )
-            # Count the number of idle vehicles after Dispatch
-            for area in self.areas:
-                area.later_dispatch_idle_vehicles = len(area.idle_vehicles)
-
-            # A time slot is processed
-            self.step += 1
-            self.real_exp_time += self.time_periods
-        # ------------------------------------------------
-        episode_end_time = datetime.datetime.now()
-
-        sum_order_value = 0
-        order_value_num = 0
-        for order in self.orders:
-            if order.arrive_info != ArriveInfo.REJECT:
-                sum_order_value += order.order_value
-                order_value_num += 1
-
-        # ------------------------------------------------
-        print("Experiment over")
-        print(f"Episode: {self.episode}")
-        print(f"Clusting mode: {self.area_mode.value}")
-        print(f"Demand Prediction mode: {self.demand_prediction_mode.value}")
-        print(f"Dispatch mode: {self.dispatch_mode.value}")
-        print(
-            "Date: "
-            + str(self.orders[0].release_time.month)
-            + "/"
-            + str(self.orders[0].release_time.day)
-        )
-        print(
-            "Weekend or Workday: "
-            + self.__workday_or_weekend(self.orders[0].release_time.weekday())
-        )
-        if self.area_mode == AreaMode.CLUSTER:
-            print("Number of Clusters: " + str(self.num_areas))
-        elif self.area_mode == AreaMode.GRID:
-            print("Number of Grids: " + str(self.num_areas))
-        print("Number of Vehicles: " + str(len(self.vehicles)))
-        print("Number of Orders: " + str(len(self.orders)))
-        print("Number of Reject: " + str(self.static_service.reject_num))
-        print("Number of Dispatch: " + str(self.static_service.dispatch_num))
-        if (self.static_service.dispatch_num) != 0:
-            print(
-                "Average Dispatch Cost: "
-                + str(
-                    self.static_service.totally_dispatch_cost
-                    / self.static_service.dispatch_num
-                )
-            )
-        if (len(self.orders) - self.static_service.reject_num) != 0:
-            print(
-                "Average wait time: "
-                + str(
-                    self.static_service.totally_wait_time
-                    / (len(self.orders) - self.static_service.reject_num)
-                )
-            )
-        print("Totally Order value: " + str(sum_order_value))
-        print("Totally Update Time : " + str(self.static_service.totally_update_time))
-        print(
-            "Totally NextState Time : "
-            + str(self.static_service.totally_next_state_time)
-        )
-        print(
-            "Totally Learning Time : " + str(self.static_service.totally_learning_time)
-        )
-        print(
-            "Totally Demand Predict Time : "
-            + str(self.static_service.totally_demand_predict_time)
-        )
-        print(
-            "Totally Dispatch Time : " + str(self.static_service.totally_dispatch_time)
-        )
-        print(
-            "Totally Simulation Time : " + str(self.static_service.totally_match_time)
-        )
-        print("Episode Run time : " + str(episode_end_time - episode_start_time))
-
-        self.static_service.save_stats(
-            date=f"2016{self.orders[0].release_time.month}{self.orders[0].release_time.day}"
-        )
-
 
 """
 Experiment over
@@ -1267,24 +1213,23 @@ Episode Run time : 0:00:02.313628
 """
 Experiment over
 Episode: 0
-Clusting mode: AreaMode.GRID
-Demand Prediction mode: DemandPredictionMode.TRAINING
-Dispatch mode: DispatchMode.RANDOM
+Clusting mode: Grid
+Demand Prediction mode: Train
+Dispatch mode: NotDispatch
 Date: 6/1
 Weekend or Workday: Workday
 Number of Grids: 9
-Number of Vehicles: 6000
+Number of Vehicles: 50
 Number of Orders: 130
-Number of Reject: 0
-Number of Dispatch: 161224
-Average Dispatch Cost: 0.0
-Average wait time: 0.0
-Totally Order value: 263
-Totally Update Time : 0:00:00.000608
-Totally NextState Time : 0:00:00.000064
-Totally Learning Time : 0:00:00.000062
-Totally Demand Predict Time : 0:00:00.000614
-Totally Dispatch Time : 0:00:00.402556
-Totally Simulation Time : 0:00:00.052443
-Episode Run time : 0:00:00.457505
+Number of Reject: 37
+Number of Dispatch: 0
+Average wait time: 0.27956989247311825
+Totally Order value: 183
+Totally Update Time : 0:00:00.000368
+Totally NextState Time : 0:00:00.000061
+Totally Learning Time : 0:00:00.000068
+Totally Demand Predict Time : 0:00:00.000546
+Totally Dispatch Time : 0:00:00.000113
+Totally Simulation Time : 0:00:00.005607
+Episode Run time : 0:00:00.007737
 """
