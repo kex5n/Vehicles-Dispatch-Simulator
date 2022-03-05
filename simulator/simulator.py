@@ -16,10 +16,11 @@ from domain import (
     DemandPredictionMode,
     DispatchMode,
     LocalRegionBound,
+    area_mode,
 )
-from modules import DispatchModuleInterface, StaticsService
-from modules.dispatch import RandomDispatch
-from objects import Area, Cluster, Grid, NodeManager, Order, Vehicle
+from modules import DispatchModuleInterface, RandomDispatch, StaticsService
+from modules.demand_predict import DemandPredictorInterface, MockDemandPredictor
+from objects import Area, Cluster, Grid, NodeManager, Node, Order, Vehicle
 from objects.order import OrderManager
 from preprocessing.readfiles import read_all_files, read_map, read_order
 from util import haversine
@@ -71,7 +72,10 @@ class Simulation(object):
         self.dispatch_module: DispatchModuleInterface = self.__load_dispatch_component(
             dispatch_mode=dispatch_mode
         )
-        self.demand_predictor_module = None
+        self.demand_predictor_module: DemandPredictorInterface = self.__load_demand_prediction(
+            demand_prediction_mode=demand_prediction_mode,
+            area_mode=area_mode,
+        )
         self.node_manager: NodeManager = None
         self.order_manager: OrderManager = None
 
@@ -205,12 +209,12 @@ class Simulation(object):
             pick_up_time_window=self.pick_up_time_window,
         )
 
-        if self.area_mode == AreaMode.CLUSTER:
-            print("Create Clusters")
-            self.areas = self.__create_cluster()
-        elif self.area_mode == AreaMode.GRID:
+        if self.area_mode == AreaMode.GRID:
             print("Create Grids")
             self.areas = self.__create_grid()
+        else:
+            print("Create Clusters")
+            self.areas = self.__create_cluster(self.area_mode)
 
         for node_id in tqdm(self.node_manager.node_id_list):
             for area in self.areas:
@@ -480,9 +484,10 @@ class Simulation(object):
 
         return all_grid
 
-    def __create_cluster(self) -> List[Area]:
-        node_location: np.ndarray = self.node[["Longitude", "Latitude"]].values.round(7)
-        node_id_list: np.ndarray = self.node["NodeID"].values.astype("int64")
+    def __create_cluster(self, area_mode: AreaMode) -> List[Area]:
+        node_location: np.ndarray = self.node_manager.node_locations
+        node_id_list: np.ndarray = self.node_manager.node_id_list
+        node_index_list: np.ndarray = self.node_manager.node_index_list
 
         N = {}
         for i in range(len(node_id_list)):
@@ -503,18 +508,14 @@ class Simulation(object):
 
         cluster_path = (
             "./data/"
-            + str(self.local_region_bound)
+            + f"({str(self.local_region_bound)})"
             + str(self.num_areas)
-            + str(self.area_mode)
-            + "Clusters.csv"
+            + str(self.area_mode.value)
+            + "Cluster.csv"
         )
         if os.path.exists(cluster_path):
-            reader = pd.read_csv(cluster_path, chunksize=1000)
-            label_pred: List = []
-            for chunk in reader:
-                label_pred.append(chunk)
-            label_pred_df: pd.DataFrame = pd.concat(label_pred)
-            label_pred: np.ndarray = label_pred_df.values
+            label_pred_df: pd.DataFrame = pd.read_csv(cluster_path)
+            label_pred: np.ndarray = label_pred_df["GridID"].values
             label_pred = label_pred.flatten()
             label_pred = label_pred.astype("int64")
         else:
@@ -523,18 +524,22 @@ class Simulation(object):
         # Loading Clustering results into simulator
         print("Loading Clustering results")
         for i in range(self.num_areas):
-            temp = node_location[label_pred == i]
-            for j in range(len(temp)):
+            tmp_node_id_list = node_id_list[label_pred == i]
+            tmp_node_locations = node_location[label_pred == i]
+            tmp_node_index_list = node_index_list[label_pred == i]
+            for node_id, node_locaton, node_index in zip(tmp_node_id_list, tmp_node_locations, tmp_node_index_list):
                 clusters[i].nodes.append(
-                    (
-                        self.node_id_list.index(N[(temp[j, 0], temp[j, 1])]),
-                        (temp[j, 0], temp[j, 1]),
+                    Node(
+                        id=node_id,
+                        node_index=node_index,
+                        longitude=node_locaton[0],
+                        latitude=node_locaton[1]
                     )
                 )
 
         save_cluster_neighbor_path = (
             "./data/"
-            + str(self.local_region_bound)
+            + f"({str(self.local_region_bound)})"
             + str(self.num_areas)
             + str(self.area_mode)
             + "Neighbor.csv"
@@ -611,33 +616,15 @@ class Simulation(object):
 
         return clusters
 
-    def __load_demand_prediction(self):
-        if self.demand_prediction_mode == DemandPredictionMode.TRAIN:
-            self.demand_predictor_module = None
-            return
-
-        elif self.demand_prediction_mode == DemandPredictionMode.TEST:
-            self.demand_predictor_module = HAPredictionModel()
-            demand_prediction_model_path = (
-                "./model/"
-                + str(self.demand_prediction_mode)
-                + "PredictionModel"
-                + str(self.area_mode)
-                + str(self.side_length_meter)
-                + str(self.local_region_bound)
-                + ".csv"
-            )
-        # You can extend the predictor here
-        # elif self.demand_prediction_mode == 'Your predictor name':
-        else:
-            raise Exception("DemandPredictionMode Name error")
-
-        if os.path.exists(demand_prediction_model_path):
-            self.demand_predictor_module.Load(demand_prediction_model_path)
-        else:
-            print(demand_prediction_model_path)
-            raise Exception("No Demand Prediction Model")
-        return
+    def __load_demand_prediction(
+        self,
+        demand_prediction_mode: DemandPredictionMode,
+        area_mode: AreaMode,
+    ) -> DispatchModuleInterface:
+        return MockDemandPredictor(
+            demand_prediction_mode=demand_prediction_mode,
+            area_mode=area_mode,
+        )
 
     def __normalization_1d(self, arr: np.ndarray) -> np.ndarray:
         arrmax = arr.max()
@@ -654,12 +641,24 @@ class Simulation(object):
 
     # The main modules
     # ---------------------------------------------------------------------------
-    def __demand_predict_function(self) -> None:
+    def __demand_predict_function(
+        self,
+        start_datetime: datetime.datetime,
+        end_datetime: datetime.datetime,
+        feature: np.ndarray,
+        num_areas: int
+    ) -> np.ndarray:
         """
         Here you can implement your own order forecasting method
         to provide efficient and accurate help for Dispatch method
         """
-        return
+        pred = self.demand_predictor_module.predict(
+            start_datetime=start_datetime,
+            end_datetime=end_datetime,
+            feature=None,
+            num_areas=num_areas
+        )
+        return pred
 
     def __supply_expect_function(self) -> None:
         """
@@ -922,7 +921,12 @@ class Simulation(object):
             )
 
             __step_demand_predict_start_time = datetime.datetime.now()
-            self.__demand_predict_function()
+            self.__demand_predict_function(
+                start_datetime=self.real_time_in_experiment,
+                end_datetime=self.real_time_in_experiment + self.time_periods,
+                feature=None,
+                num_areas=self.num_areas,
+            )
             self.__supply_expect_function()
             self.static_service.add_demand_predict_time(
                 datetime.datetime.now() - __step_demand_predict_start_time
@@ -969,10 +973,10 @@ class Simulation(object):
             "Weekend or Workday: "
             + self.__workday_or_weekend(self.order_manager.farst_order_start_time.weekday())
         )
-        if self.area_mode == AreaMode.CLUSTER:
-            print("Number of Clusters: " + str(self.num_areas))
-        elif self.area_mode == AreaMode.GRID:
+        if self.area_mode == AreaMode.GRID:
             print("Number of Grids: " + str(self.num_areas))
+        else:
+            print("Number of Clusters: " + str(self.num_areas))
         print("Number of Vehicles: " + str(len(self.vehicles)))
         print("Number of Orders: " + str(len(self.order_manager)))
         print("Number of Reject: " + str(self.static_service.reject_num))

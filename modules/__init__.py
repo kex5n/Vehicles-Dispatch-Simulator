@@ -1,2 +1,3 @@
 from modules.dispatch import DispatchModuleInterface, RandomDispatch
 from modules.statics import StaticsService
+from modules.demand_predict import DemandPredictorInterface, MockDemandPredictor

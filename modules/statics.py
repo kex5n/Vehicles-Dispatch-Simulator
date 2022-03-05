@@ -20,13 +20,6 @@ class StaticsService:
                 "dispatch_num",
                 "totally_dispatch_cost",
                 "totally_wait_time",
-                "totally_update_time",
-                "totally_reward_time",
-                "totally_next_state_time",
-                "totally_learning_time",
-                "totally_dispatch_time",
-                "totally_match_time",
-                "totally_demand_predict_time"
             ]
         )
         self.__order_num: int = 0
@@ -145,13 +138,6 @@ class StaticsService:
                 "dispatch_num": [self.__dispatch_num],
                 "totally_dispatch_cost": [self.__totally_dispatch_cost],
                 "totally_wait_time": [self.__totally_wait_time],
-                "totally_update_time": [self.__totally_update_time],
-                "totally_reward_time": [self.__totally_reward_time],
-                "totally_next_state_time": [self.__totally_next_state_time],
-                "totally_learning_time": [self.__totally_learning_time],
-                "totally_dispatch_time": [self.__totally_dispatch_time],
-                "totally_match_time": [self.__totally_match_time],
-                "totally_demand_predict_time": [self.__totally_demand_predict_time],
             }
         )
         self.__stats_df = pd.concat([self.__stats_df, tmp_df])

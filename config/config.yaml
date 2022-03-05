@@ -26,6 +26,6 @@ SIDE_LENGTH_KIRO_METER: 0.5
 VEHICLE_SERVICE_KIRO_METER: 0.5
 
 DISPATCH_MODE: "Random"  # Random or NotDispatch
-DEMAND_PREDICTION_MODE: "Test"  # Train or Test
+DEMAND_PREDICTION_MODE: "Train"  # Train or Test
 # ["TransportationClustering","KmeansClustering","SpectralClustering"]
-AREA_MODE: "Grid"  # Grid or Cluster
+AREA_MODE: "TransportationClustering"  # Grid or Cluster

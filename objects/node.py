@@ -5,8 +5,9 @@ import pandas as pd
 
 
 class Node:
-    def __init__(self, id: int, longitude: float, latitude: float):
+    def __init__(self, id: int, node_index: int,longitude: float, latitude: float):
         self.id: int = id
+        self.node_index: int = node_index
         self.longitude: float = longitude
         self.latitude: float = latitude
 
@@ -23,12 +24,13 @@ class NodeManager:
         self.__node_list = [
             Node(
                 id=row["NodeID"],
+                node_index=int(row["NodeIndex"]),
                 longitude=row["Longitude"],
                 latitude=row["Latitude"],
             )
             for _, row in node_df.iterrows()
         ]
-        self.__node_index = {node.id: idx for idx, node in enumerate(self.__node_list)}
+        self.__node_index = {node.id: node.node_index for node in self.__node_list}
         self.__node_dict = {node.id: node for node in self.__node_list}
 
     @property
@@ -43,6 +45,10 @@ class NodeManager:
     @property
     def node_id_list(self) -> np.ndarray:
         return np.array([node.id for node in self.__node_list])
+
+    @property
+    def node_index_list(self) -> np.ndarray:
+        return np.array([node.node_index for node in self.__node_list])
 
     def get_nodes(self) -> List[Node]:
         return [node for node in self.__node_list]

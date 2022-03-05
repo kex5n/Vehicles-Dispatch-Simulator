@@ -69,15 +69,8 @@ def read_node(input_file_path) -> pd.DataFrame:
 
 
 def read_node_id_list(input_file_path) -> List[int]:
-    node_id_list = []
-    with open(input_file_path, "r") as f:
-        data = f.readlines()
-
-        for line in data:
-            odom = line.split()
-            odom = int(odom[0])
-            node_id_list.append(odom)
-    return node_id_list
+    df = pd.read_csv(input_file_path)
+    return df["NodeID"].values.tolist()
 
 
 def read_order(input_file_path) -> pd.DataFrame:
@@ -119,7 +112,6 @@ def read_all_files(
     order_file_date: str, demand_prediction_mode: DemandPredictionMode
 ) -> Tuple[pd.DataFrame, List[int], pd.DataFrame, np.ndarray, pd.DataFrame]:
     node_path = os.path.join(os.getcwd(), "data", "Node.csv")
-    node_id_list_path = os.path.join(os.getcwd(), "data", "NodeIDList.txt")
     if demand_prediction_mode == DemandPredictionMode.TRAIN:
         directory = "train"
     else:
@@ -136,7 +128,7 @@ def read_all_files(
     map_path = os.path.join(os.getcwd(), "data", "AccurateMap.csv")
 
     node_df = read_node(node_path)
-    node_id_list = read_node_id_list(node_id_list_path)
+    node_id_list = read_node_id_list(node_path)
     orders = read_order(orders_path)
     vehicles = read_driver(vehicles_path)
     cost_map = read_cost_map(map_path)
