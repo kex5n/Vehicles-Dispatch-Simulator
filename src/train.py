@@ -1,5 +1,5 @@
 from config import Config
-from domain.demand_prediction_mode import DemandPredictionMode
+from modules.dispatch import load_dispatch_component, DispatchModuleInterface
 from simulator.simulator import Simulator
 from util import DataModule
 
@@ -18,19 +18,24 @@ if __name__ == "__main__":
         minutes=config.MINUTES,
         pick_up_time_window=config.PICKUPTIMEWINDOW
     )
-
+    demand_predictor_module: DispatchModuleInterface = load_dispatch_component(config.DISPATCH_MODE)
     date_module = DataModule(demand_prediction_mode=config.DEMAND_PREDICTION_MODE)
     simulator.create_all_instantiate(date_module.date)
-    simulator()
 
     while date_module.next():
+        simulator.init_time()
+        end_time = simulator.end_time
+        while simulator.real_time_in_experiment <= end_time:
+            simulator.update()
+            simulator.match()
+            simulator.count_idle_vehicles()
+            area_manager = simulator.area_manager_copy
+            vehicle_manager = simulator.vehicle_manager_copy
+            dispatch_order_list = demand_predictor_module(
+                area_manager=area_manager,
+                vehicle_manager=vehicle_manager
+            )
+            simulator.set_dispatch_orders(dispatch_order_list)
+            simulator.proceed()
+        simulator.print_stats()
         simulator.reload(date_module.date)
-        simulator()
-
-    if config.DEMAND_PREDICTION_MODE == DemandPredictionMode.TEST:
-        simulator.static_service.write_stats(
-            data_size=config.DATA_SIZE,
-            num_vehicles=config.VEHICLES_NUMBER,
-            area_mode=config.AREA_MODE,
-            dispatch_mode=config.DISPATCH_MODE,
-        )

@@ -50,7 +50,7 @@ class NodeManager:
     def node_index_list(self) -> np.ndarray:
         return np.array([node.node_index for node in self.__node_list])
 
-    def get_nodes(self) -> List[Node]:
+    def get_node_list(self) -> List[Node]:
         return [node for node in self.__node_list]
 
     def get_node_index(self, node_id: int) -> int:
@@ -61,3 +61,6 @@ class NodeManager:
 
     def __len__(self) -> int:
         return len(self.__node_list)
+
+    def get_node_by_node_id(self, node_id: int) -> Node:
+        return self.__node_dict[node_id]

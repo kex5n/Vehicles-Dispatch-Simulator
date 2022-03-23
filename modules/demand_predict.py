@@ -3,15 +3,18 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from domain import AreaMode
+from domain import AreaMode, DispatchMode
 
 from domain.demand_prediction_mode import DemandPredictionMode
 
 
 class DemandPredictorInterface:
-    def predict(self, start_datetime: datetime, end_datetime: datetime, feature: np.ndarray) -> np.ndarray:
+    def predict(self, start_datetime: datetime, end_datetime: datetime, feature: np.ndarray, num_areas: int) -> np.ndarray:
         raise NotImplementedError
 
+class RandomDispatchPredictor(DemandPredictorInterface):
+    def predict(self, start_datetime: datetime, end_datetime: datetime, feature: np.ndarray, num_areas: int) -> np.ndarray:
+        return np.zeros(num_areas)
 
 class MockDemandPredictor(DemandPredictorInterface):
     def __init__(self, demand_prediction_mode: DemandPredictionMode, area_mode: AreaMode):
@@ -46,3 +49,16 @@ class MockDemandPredictor(DemandPredictorInterface):
 
     def __is_same_date(self, other: datetime):
         return self.__date == other.date()
+
+
+def load_demand_prediction_component(
+    dispatch_mode: DispatchMode,
+    demand_prediction_mode: DemandPredictionMode,
+    area_mode: AreaMode,
+) -> DemandPredictorInterface:
+    if dispatch_mode == dispatch_mode.RANDOM:
+        return RandomDispatchPredictor()
+    return MockDemandPredictor(
+        demand_prediction_mode=demand_prediction_mode,
+        area_mode=area_mode,
+    )
