@@ -3,15 +3,21 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from domain import AreaMode, DispatchMode
+from modules.dispatch import DispatchOrder
 
 
 @dataclass
 class StaticsService:
     def __init__(self):
         self.__experiment_start_time = datetime.datetime.now()
+        self.__output_dir = (
+            Path(__file__).parents[1] / "outputs"
+            / f"{self.__experiment_start_time.year}-{self.__experiment_start_time.month}-{self.__experiment_start_time.day}_{self.__experiment_start_time.hour}:{self.__experiment_start_time.minute}"
+        )
         self.__stats_df: pd.DataFrame = pd.DataFrame(
             columns=[
                 "date",
@@ -20,6 +26,14 @@ class StaticsService:
                 "dispatch_num",
                 "totally_dispatch_cost",
                 "totally_wait_time",
+            ]
+        )
+        self.__dispatch_history_df: pd.DataFrame = pd.DataFrame(
+            columns = [
+                "datetime",
+                "vehicle_id",
+                "from_area_id",
+                "to_area_id",
             ]
         )
         self.__order_num: int = 0
@@ -150,10 +164,17 @@ class StaticsService:
         area_mode: AreaMode,
         dispatch_mode: DispatchMode
     ) -> None:
-        output_dir = Path(__file__).parents[1] / "outputs"
-        os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(self.__output_dir, exist_ok=True)
         self.__stats_df["data_size"] = data_size
         self.__stats_df["num_vehicles"] = num_vehicles
         self.__stats_df["area_mode"] = area_mode.value
         self.__stats_df["dispatch_mode"] = dispatch_mode.value
-        self.__stats_df.to_csv(output_dir / f"{self.__experiment_start_time}.csv", index=False)
+        self.__stats_df.to_csv(self.__output_dir / f"statistics.csv", index=False)
+
+    def save_dispatch_history(self, dispatch_data: np.ndarray) -> None:
+        df = pd.DataFrame(dispatch_data, columns=self.__dispatch_history_df.columns)
+        self.__dispatch_history_df = pd.concat([self.__dispatch_history_df, df])
+
+    def write_dispatch_history(self) -> None:
+        os.makedirs(self.__output_dir, exist_ok=True)
+        self.__dispatch_history_df.to_csv(self.__output_dir / f"dispatch_history.csv", index=False)

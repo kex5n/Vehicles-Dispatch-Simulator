@@ -12,7 +12,7 @@ class Node:
         self.latitude: float = latitude
 
     def __eq__(self, other: Any):
-        if isinstance(other) == Node:
+        if isinstance(other, Node):
             return False
         if other.id != self.id:
             return False

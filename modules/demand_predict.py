@@ -12,7 +12,7 @@ class DemandPredictorInterface:
     def predict(self, start_datetime: datetime, end_datetime: datetime, feature: np.ndarray, num_areas: int) -> np.ndarray:
         raise NotImplementedError
 
-class RandomDispatchPredictor(DemandPredictorInterface):
+class RandomDemandPredictor(DemandPredictorInterface):
     def predict(self, start_datetime: datetime, end_datetime: datetime, feature: np.ndarray, num_areas: int) -> np.ndarray:
         return np.zeros(num_areas)
 
@@ -23,10 +23,13 @@ class MockDemandPredictor(DemandPredictorInterface):
         self.__date: datetime = None
         self.__order_df = None
 
-    def predict(self, start_datetime: datetime, end_datetime: datetime, feature: np.ndarray, num_areas: int) -> np.ndarray:
+    def predict(self, start_datetime: datetime, end_datetime: datetime, feature: np.ndarray, num_areas: int, debug: bool = False) -> np.ndarray:
         if (self.__date is None) or (not self.__is_same_date(end_datetime)):
             file_name = f"order_2016{str(end_datetime.month).zfill(2)}{str(end_datetime.day).zfill(2)}.csv"
-            order_path = Path(__file__).parents[1] / "data" / "Order" / "modified" / "dummy" / file_name
+            if not debug:
+                order_path = Path(__file__).parent / "dummy_data" / file_name
+            else:
+                order_path = Path(__file__).parents[1] / "data" / "Order" / "modified" / "dummy" / file_name
             self.__order_df = pd.read_csv(order_path)
             self.__date = end_datetime.date()
         start_timestamp = int(start_datetime.timestamp())
@@ -34,7 +37,7 @@ class MockDemandPredictor(DemandPredictorInterface):
         df = self.__order_df[
             (self.__order_df["Start_time"]>=start_timestamp) & (self.__order_df["End_time"]<=end_timestamp)
         ]
-        if self.__area_mode == AreaMode.TRANSPORTATION_CLUSTERING:
+        if self.__area_mode == AreaMode.TRANSPORTATION_CLUSTERING or debug:
             pred_array = []
             summary_df = df.groupby("Start_GridID").count().reset_index()[["Start_GridID", "ID"]].sort_values("Start_GridID")
             for i in range(num_areas):
@@ -55,9 +58,10 @@ def load_demand_prediction_component(
     dispatch_mode: DispatchMode,
     demand_prediction_mode: DemandPredictionMode,
     area_mode: AreaMode,
+    debug: bool = False
 ) -> DemandPredictorInterface:
     if dispatch_mode == dispatch_mode.RANDOM:
-        return RandomDispatchPredictor()
+        return RandomDemandPredictor()
     return MockDemandPredictor(
         demand_prediction_mode=demand_prediction_mode,
         area_mode=area_mode,

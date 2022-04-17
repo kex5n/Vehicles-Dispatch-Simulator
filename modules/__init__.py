@@ -1,3 +1,4 @@
-from modules.dispatch import DispatchModuleInterface, RandomDispatch
-from modules.statics import StaticsService
-from modules.demand_predict import DemandPredictorInterface, MockDemandPredictor
+from .dispatch import DispatchModuleInterface, RandomDispatch, load_dispatch_component
+from .statics import StaticsService
+from .demand_predict import DemandPredictorInterface, MockDemandPredictor, load_demand_prediction_component
+from .reward import RewardCalculator

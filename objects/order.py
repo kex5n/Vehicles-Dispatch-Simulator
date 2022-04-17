@@ -85,6 +85,9 @@ class OrderManager:
     def increment(self) -> None:
         self.__order_index += 1
 
+    def get_orders_in_timeslice(self, start_time: datetime, end_time: datetime) -> List[Order]:
+        return list(filter(lambda x: (x.order_time >= start_time) and (x.order_time < end_time), self.__order_list))
+
     def get_orders(self) -> List[Order]:
         return [order for order in self.__order_list]
 
