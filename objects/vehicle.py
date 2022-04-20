@@ -12,6 +12,14 @@ class Vehicle(object):
         self.__location_area_id = None  # Which cluster the current vehicle belongs to
         self.orders: List[Order] = []  # Orders currently on board
         self.delivery_node_id = None  # Next destination of current vehicle
+        self.__is_dispatched = False
+
+    @property
+    def is_dispatched(self) -> bool:
+        return self.__is_dispatched
+
+    def set_is_dispatched(self, is_dispatched: bool) -> None:
+        self.__is_dispatched = is_dispatched
 
     def move(self, destination_area_id: int) -> None:
         self.__location_node_id = self.delivery_node_id
@@ -37,6 +45,7 @@ class Vehicle(object):
     def reset(self) -> None:
         self.orders.clear()
         self.delivery_node_id = None
+        self.__is_dispatched = False
 
     def example(self) -> None:
         print("Vehicle Example output")
@@ -59,9 +68,16 @@ class VehicleManager:
     def get_vehicle_list(self) -> List[Vehicle]:
         return [vehicle for vehicle in self.__vehicle_list]
 
+    def get_dispatched_vehicle_list(self) -> List[Vehicle]:
+        return [vehicle for vehicle in self.__vehicle_list if vehicle.is_dispatched]
+
     def get_vehicle_by_vehicle_id(self, vehicle_id: int) -> Vehicle:
         return self.__vehicle_dict[vehicle_id]
 
     def reset_vehicles(self) -> None:
         for vehicle in self.__vehicle_list:
             vehicle.reset()
+
+    def reset_is_dispatched(self) -> None:
+        for vehicle in self.__vehicle_list:
+            vehicle.set_is_dispatched(False)

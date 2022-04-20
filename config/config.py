@@ -15,8 +15,10 @@ class Config:
     SIDE_LENGTH_KIRO_METER: float
     VEHICLE_SERVICE_KIRO_METER: float
     DISPATCH_MODE: DispatchMode
-    DEMAND_PREDICTION_MODE: DemandPredictionMode
     AREA_MODE: AreaMode
+    EPISODE: int
+    K: int
+    DEBUG: bool
 
     @property
     def TIMESTEP(self):
@@ -46,8 +48,8 @@ class Config:
             SIDE_LENGTH_KIRO_METER=config["SIDE_LENGTH_KIRO_METER"],
             VEHICLE_SERVICE_KIRO_METER=config["VEHICLE_SERVICE_KIRO_METER"],
             DISPATCH_MODE=DispatchMode(config["DISPATCH_MODE"]),
-            DEMAND_PREDICTION_MODE=DemandPredictionMode(
-                config["DEMAND_PREDICTION_MODE"]
-            ),
             AREA_MODE=AreaMode(config["AREA_MODE"]),
+            EPISODE=config["EPISODE"],
+            K=config["K"],
+            DEBUG=config["DEBUG"]
         )

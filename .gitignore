@@ -108,3 +108,4 @@ data/*.pbf
 *.DS_Store
 outputs/*
 submit
+models/checkpoints/

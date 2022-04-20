@@ -41,8 +41,11 @@ class RewardCalculator:
         is_stay = start_area_id == destination_area_id
         start_omega = self.omega_array[start_area_id]
         distination_omega = self.omega_array[destination_area_id]
-        return RewardCalculator.__reward(
-            start_omega=start_omega,
-            distination_omega=distination_omega,
-            is_stay=is_stay,
-        )
+        try:
+            return RewardCalculator.__reward(
+                start_omega=start_omega,
+                distination_omega=distination_omega,
+                is_stay=is_stay,
+            )
+        except:
+            breakpoint()

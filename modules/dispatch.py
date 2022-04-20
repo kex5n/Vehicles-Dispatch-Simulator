@@ -20,6 +20,8 @@ class DispatchOrder:
     start_node_id: int
     end_node_id: int
     action: int
+    from_area_id: int = None
+    to_area_id: int = None
 
 
 class DispatchModuleInterface:
@@ -64,17 +66,19 @@ class DQNDispatch(DispatchModuleInterface):
         self.__feature_manager = FeatureManager(k=config.K)
         self.is_train = is_train
 
-    def dispatch(self, area_manager: AreaManager, vehicle: Vehicle, prediction, is_train: bool = False) -> DispatchOrder:
+    def dispatch(self, area_manager: AreaManager, vehicle: Vehicle, prediction, episode: int = 0, is_train: bool = False) -> DispatchOrder:
         current_area = area_manager.get_area_by_area_id(vehicle.location_area_id)
         candidate_area_id = [current_area.id] + current_area.get_neighbor_ids()
-        demand_array = np.array([area.num_idle_vehicles for area in area_manager.get_area_list()])
+        supply_array = np.array([area.num_idle_vehicles for area in area_manager.get_area_list()])
         state_list = self.__feature_manager.calc_state(
             area=current_area,
-            demand_array=demand_array,
-            supply_array=prediction
+            demand_array=prediction,
+            supply_array=supply_array
         )
         state_array = torch.FloatTensor(state_list)
-        action = self.model.get_action(state_array, episode=0, candidate_area_ids=candidate_area_id, is_train=is_train)
+        action = self.model.get_action(state_array, episode=episode, candidate_area_ids=candidate_area_id, is_train=is_train)
+        # if candidate_area_id[0] == 3:
+        #     breakpoint()
         next_area_id = candidate_area_id[action]
         next_node_id = area_manager.get_area_by_area_id(next_area_id).centroid
         return DispatchOrder(
@@ -82,13 +86,15 @@ class DQNDispatch(DispatchModuleInterface):
             start_node_id=vehicle.location_node_id,
             end_node_id=next_node_id,
             action=action,
+            from_area_id=current_area.id,
+            to_area_id=next_area_id
         )
 
     def memorize(self, state, action, next_state, reward, from_area_id, to_area_id) -> None:
         self.model.memorize(state, action, next_state, reward, from_area_id, to_area_id)
 
-    def train(self, area_manager: AreaManager):
-        return self.model.update_q_function(area_manager=area_manager)
+    def train(self, area_manager: AreaManager, date_info, episode=None):
+        return self.model.update_q_function(area_manager=area_manager, date_info=date_info, episode=episode)
 
     def save(self, checkpoint_path: str) -> None:
         self.model.save_checkpoint(checkpoint_path)
@@ -96,7 +102,7 @@ class DQNDispatch(DispatchModuleInterface):
     def load(self, checkpoint_path: str) -> None:
         self.model.load_checkpoint(checkpoint_path)
 
-    def __call__(self, area_manager: AreaManager, vehicle_manager: VehicleManager, prediction: np.ndarray) -> List[DispatchOrder]:
+    def __call__(self, area_manager: AreaManager, vehicle_manager: VehicleManager, prediction: np.ndarray, episode: int = 0) -> List[DispatchOrder]:
         dispatch_order_list: List[DispatchOrder] = []
         for area in area_manager.get_area_list():
             for vehicle_id in area.get_idle_vehicle_ids():
@@ -104,6 +110,7 @@ class DQNDispatch(DispatchModuleInterface):
                 dispatch_order = self.dispatch(
                     area_manager=area_manager,
                     vehicle=vehicle,
+                    episode=episode,
                     prediction=prediction,
                     is_train=self.is_train,
                 )

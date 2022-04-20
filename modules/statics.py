@@ -172,6 +172,8 @@ class StaticsService:
         self.__stats_df.to_csv(self.__output_dir / f"statistics.csv", index=False)
 
     def save_dispatch_history(self, dispatch_data: np.ndarray) -> None:
+        if len(dispatch_data) == 0:
+            return
         df = pd.DataFrame(dispatch_data, columns=self.__dispatch_history_df.columns)
         self.__dispatch_history_df = pd.concat([self.__dispatch_history_df, df])
 

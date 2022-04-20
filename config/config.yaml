@@ -21,10 +21,13 @@ LOCAL_REGION_BOUND:
     south: 40.700
     north: 40.785
 
-VEHICLES_NUMBER: 50
+VEHICLES_NUMBER: 500
 SIDE_LENGTH_KIRO_METER: 0.5
 VEHICLE_SERVICE_KIRO_METER: 0.5
 
-DISPATCH_MODE: "Random"  # Random or NotDispatch
-DEMAND_PREDICTION_MODE: "Train"  # Train or Test
+DISPATCH_MODE: "DQN"  # DQN or Random or NotDispatch
 AREA_MODE: "Grid"  # Grid or TransportationClustering
+
+EPISODE: 10
+K: 5
+DEBUG: True

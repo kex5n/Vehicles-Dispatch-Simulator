@@ -24,7 +24,7 @@ if __name__ == "__main__":
     simulate_start_time = datetime.now()
     dqn_checkpoint_path = (
         Path(__file__).parents[1] / "models" / "checkpoints" / "dqn" 
-        / "2022-4-14_1:38:55" / "dqn.cpt"
+        / "2022-4-20_22:23:2" / "episode2.cpt"
     )
     # init modules
     simulator = Simulator(
@@ -99,8 +99,8 @@ if __name__ == "__main__":
             # for debug
             area_manager = simulator.area_manager_copy
             after = [area.num_idle_vehicles for area in area_manager.get_area_list()]
-            if (after[4] != 0):
-                breakpoint()
+            # if (after[4] != 0):
+            #     breakpoint()
             
             simulator.count_idle_vehicles()
 

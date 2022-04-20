@@ -20,7 +20,7 @@ from modules.state import FeatureManager
 from simulator.simulator import Simulator
 from util import DataModule
 
-USE_WANDB = False
+USE_WANDB = True
 
 if __name__ == "__main__":
     config = Config.load()
@@ -62,10 +62,10 @@ if __name__ == "__main__":
         is_train=True,
     )
 
+    date_module = DataModule(demand_prediction_mode=DemandPredictionMode.TRAIN)
+    simulator.create_all_instantiate(date_module.date)
     for episode in range(config.EPISODE):
         print(f"=========================== EPISODE {episode+1}: start ===========================")
-        date_module = DataModule(demand_prediction_mode=DemandPredictionMode.TRAIN)
-        simulator.create_all_instantiate(date_module.date)
         while date_module.next():
             simulator.init_time()
             end_time = simulator.end_time
@@ -103,25 +103,14 @@ if __name__ == "__main__":
                 area_manager = simulator.area_manager
                 vehicle_manager = simulator.vehicle_manager
 
-                # summarize demands
-                order_list = simulator.get_orders_in_timeslice(
-                    start_time=start_datetime_of_this_timeslice,
-                    end_time=end_datetime_of_this_timeslice,
-                )
-                demand_array = np.zeros(area_manager.num_areas)
-                for order in order_list:
-                    area_id = area_manager.node_id_to_area(order.pick_up_node_id).id
-                    demand_array[area_id] += 1
-
                 # summarize supply
                 supply_array = np.array([np.float32(area.num_idle_vehicles) for area in area_manager.get_area_list()])
 
                 # culculate state
-                for vehicle in vehicle_manager.get_vehicle_list():
+                for vehicle in vehicle_manager.get_dispatched_vehicle_list():
                     area = area_manager.get_area_by_area_id(vehicle.location_area_id)
-                    state = feature_manager.calc_state(area=area, demand_array=demand_array, supply_array=supply_array)
+                    state = feature_manager.calc_state(area=area, demand_array=prediction, supply_array=supply_array)
                     feature_manager.register_state(vehicle_id=vehicle.id, state_array=state)
-                    
                 # ===================================================================
 
                 # for debug
@@ -154,7 +143,7 @@ if __name__ == "__main__":
                 supply_array = np.array([np.float32(area.num_idle_vehicles) for area in area_manager.get_area_list()])
 
                 # culculate next state
-                for vehicle in vehicle_manager.get_vehicle_list():
+                for vehicle in vehicle_manager.get_dispatched_vehicle_list():
                     area = area_manager.get_area_by_area_id(vehicle.location_area_id)
                     next_state = feature_manager.calc_state(area=area, demand_array=demand_array, supply_array=supply_array)
                     feature_manager.register_next_state(vehicle_id=vehicle.id, next_state_array=next_state)
@@ -166,7 +155,7 @@ if __name__ == "__main__":
                 reward_list = []
                 action_list = []
                 reward_culcurator.load(supply_array=supply_array, demand_array=demand_array)
-                for vehicle in vehicle_manager.get_vehicle_list():
+                for vehicle in vehicle_manager.get_dispatched_vehicle_list():
                     from_area_id = feature_manager.get_from_area_id_by_vehicle_id(vehicle_id=vehicle.id)
                     to_area_id = feature_manager.get_to_area_id_by_vehicle_id(vehicle_id=vehicle.id)
                     reward = reward_culcurator.calc_reward(
@@ -180,9 +169,15 @@ if __name__ == "__main__":
                     action_list.append(action)
                     feature_manager.register_reward(vehicle_id=vehicle.id, reward=reward)
                 # =================================================================
-                # if start_datetime_of_this_timeslice.hour == 13:
-                #     breakpoint()
-
+                if USE_WANDB:
+                    wandb.log({'num_dispatched_vehicle': len(from_area_id_list)})
+                    wandb.log({'num_to_area_4': to_area_id_list.count(4)})
+                    wandb.log({'num_from_area_4': from_area_id_list.count(4)})
+                    cnt = 0
+                    for to_, from_ in zip(to_area_id_list, from_area_id_list):
+                        if to_ == from_:
+                            cnt += 1
+                    wandb.log({'num_same_area': cnt})
                 # ===================== learn =====================
                 for vehicle_id, feature in feature_manager.get_whole_data():
                     dispatch_module.memorize(
@@ -193,11 +188,8 @@ if __name__ == "__main__":
                         from_area_id=feature["from_area_id"],
                         to_area_id=feature["to_area_id"],
                     )
-                    if (feature["from_area_id"] == 2) and (feature["to_area_id"] == 4):
-                        breakpoint()
-                loss = dispatch_module.train(area_manager=area_manager)
-                # if episode == 3 and start_datetime_of_this_timeslice.hour == 13:
-                #     breakpoint()
+                loss = dispatch_module.train(area_manager=area_manager, date_info=start_datetime_of_this_timeslice, episode=episode)
+                
 
                 if USE_WANDB:
                     wandb.log({'loss': loss})
@@ -217,9 +209,17 @@ if __name__ == "__main__":
                     area_manager=area_manager,
                     vehicle_manager=vehicle_manager,
                     prediction=prediction,
+                    episode=episode,
                 )
 
                 # set dispatch order to simulator
+                feature_manager.reset()
+                for dispatch_order in dispatch_order_list:
+                    feature_manager.register_action(vehicle_id=dispatch_order.vehicle_id, action=dispatch_order.action)
+                    from_area_id = area_manager.node_id_to_area(node_id=dispatch_order.start_node_id).id
+                    feature_manager.register_from_area_id(vehicle_id=dispatch_order.vehicle_id, from_area_id=from_area_id)
+                    to_area_id = area_manager.node_id_to_area(node_id=dispatch_order.end_node_id).id
+                    feature_manager.register_to_area_id(vehicle_id=dispatch_order.vehicle_id, to_area_id=to_area_id)
                 simulator.set_dispatch_orders(dispatch_order_list)
                 # =================================================================
 
@@ -232,6 +232,9 @@ if __name__ == "__main__":
             simulator.reload(date_module.date)
         checkpoint_path = dqn_checkpoint_dir / f"episode{episode+1}.cpt"
         dispatch_module.save(checkpoint_path)
+
+        date_module = DataModule(demand_prediction_mode=DemandPredictionMode.TRAIN)
+        simulator.reset(date_module.date)
 
     checkpoint_path = dqn_checkpoint_dir / f"dqn.cpt"
     dispatch_module.save(checkpoint_path)

@@ -28,7 +28,7 @@ if __name__ == "__main__":
         simulator()
 
     if config.DEMAND_PREDICTION_MODE == DemandPredictionMode.TEST:
-        simulator.static_service.write_stats(
+        simulator.write_stats(
             data_size=config.DATA_SIZE,
             num_vehicles=config.VEHICLES_NUMBER,
             area_mode=config.AREA_MODE,
