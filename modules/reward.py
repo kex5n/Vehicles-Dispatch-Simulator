@@ -1,6 +1,12 @@
 import numpy as np
 
 
+# random.seed(1234)
+np.random.seed(1234)
+# torch.manual_seed(1234)
+# torch.cuda.manual_seed_all(1234)
+# torch.backends.cudnn.deterministic = True
+
 class RewardCalculator:
     def __init__(self):
         self.omega_array = None

@@ -103,13 +103,7 @@ venv.bak/
 # mypy
 .mypy_cache/
 
-data/Order
-data/*.csv
-data/*.pbf
-*.DS_Store
-outputs/*
-submit
-models/checkpoints/
+models/checkpoints
+outputs
 wandb
-modules/dummy_data
 submit*

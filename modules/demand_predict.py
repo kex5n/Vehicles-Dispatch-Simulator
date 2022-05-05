@@ -7,6 +7,12 @@ from domain import AreaMode, DispatchMode
 
 from domain.demand_prediction_mode import DemandPredictionMode
 
+# random.seed(1234)
+np.random.seed(1234)
+# torch.manual_seed(1234)
+# torch.cuda.manual_seed_all(1234)
+# torch.backends.cudnn.deterministic = True
+
 
 class DemandPredictorInterface:
     def predict(self, start_datetime: datetime, end_datetime: datetime, feature: np.ndarray, num_areas: int) -> np.ndarray:

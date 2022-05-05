@@ -9,6 +9,13 @@ import pandas as pd
 from domain.demand_prediction_mode import DemandPredictionMode
 
 
+# random.seed(1234)
+np.random.seed(1234)
+# torch.manual_seed(1234)
+# torch.cuda.manual_seed_all(1234)
+# torch.backends.cudnn.deterministic = True
+
+
 def timestamp_datetime(value) -> datetime:
     d = datetime.fromtimestamp(value)
     t = dt.datetime(d.year, d.month, d.day, d.hour, d.minute, 0)

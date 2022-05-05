@@ -3,7 +3,6 @@ from pathlib import Path
 import os
 import numpy as np
 import warnings
-import wandb
 
 from domain.demand_prediction_mode import DemandPredictionMode
 warnings.simplefilter('ignore')
@@ -20,7 +19,12 @@ from modules.state import FeatureManager
 from simulator.simulator import Simulator
 from util import DataModule
 
-USE_WANDB = True
+
+# random.seed(1234)
+np.random.seed(1234)
+# torch.manual_seed(1234)
+# torch.cuda.manual_seed_all(1234)
+# torch.backends.cudnn.deterministic = True
 
 if __name__ == "__main__":
     config = Config.load()
@@ -31,8 +35,6 @@ if __name__ == "__main__":
         / f"{simulate_start_time.year}-{simulate_start_time.month}-{simulate_start_time.day}_{simulate_start_time.hour}:{simulate_start_time.minute}:{simulate_start_time.second}"
     )
     os.makedirs(dqn_checkpoint_dir)
-    if USE_WANDB:
-        wandb.init(project="cox-reproduction")
 
     # init modules
     simulator = Simulator(
@@ -113,9 +115,6 @@ if __name__ == "__main__":
                     feature_manager.register_state(vehicle_id=vehicle.id, state_array=state)
                 # ===================================================================
 
-                # for debug
-                before_num_idle_vehicles = [area.num_idle_vehicles for area in area_manager.get_area_list()]
-
                 # step simulator
                 simulator.update()
                 area_manager = simulator.area_manager
@@ -126,8 +125,6 @@ if __name__ == "__main__":
                 area_manager = simulator.area_manager
                 vehicle_manager = simulator.vehicle_manager
 
-                # for debug
-                after_num_idle_vehicles = [area.num_idle_vehicles for area in area_manager.get_area_list()]
                 # ===================== calculate next state =====================
                 order_list = simulator.get_orders_in_timeslice(
                     start_time=start_datetime_of_this_timeslice,
@@ -149,11 +146,7 @@ if __name__ == "__main__":
                     feature_manager.register_next_state(vehicle_id=vehicle.id, next_state_array=next_state)
                 # =================================================================
 
-                # ===================== calculate rewards =====================
-                from_area_id_list = []
-                to_area_id_list = []
-                reward_list = []
-                action_list = []
+                # ======================= calculate rewards =======================
                 reward_culcurator.load(supply_array=supply_array, demand_array=demand_array)
                 for vehicle in vehicle_manager.get_dispatched_vehicle_list():
                     from_area_id = feature_manager.get_from_area_id_by_vehicle_id(vehicle_id=vehicle.id)
@@ -162,23 +155,11 @@ if __name__ == "__main__":
                         start_area_id=from_area_id,
                         destination_area_id=to_area_id
                     )
-                    from_area_id_list.append(from_area_id)
-                    to_area_id_list.append(to_area_id)
-                    reward_list.append(reward)
                     action = feature_manager.get_action_by_vehicle_id(vehicle_id=vehicle.id)
-                    action_list.append(action)
                     feature_manager.register_reward(vehicle_id=vehicle.id, reward=reward)
                 # =================================================================
-                if USE_WANDB:
-                    wandb.log({'num_dispatched_vehicle': len(from_area_id_list)})
-                    wandb.log({'num_to_area_4': to_area_id_list.count(4)})
-                    wandb.log({'num_from_area_4': from_area_id_list.count(4)})
-                    cnt = 0
-                    for to_, from_ in zip(to_area_id_list, from_area_id_list):
-                        if to_ == from_:
-                            cnt += 1
-                    wandb.log({'num_same_area': cnt})
-                # ===================== learn =====================
+
+                # ============================= learn =============================
                 for vehicle_id, feature in feature_manager.get_whole_data():
                     dispatch_module.memorize(
                         state=feature["state"],
@@ -189,10 +170,6 @@ if __name__ == "__main__":
                         to_area_id=feature["to_area_id"],
                     )
                 loss = dispatch_module.train(area_manager=area_manager, date_info=start_datetime_of_this_timeslice, episode=episode)
-
-
-                if USE_WANDB:
-                    wandb.log({'loss': loss})
                 # =================================================================
 
                 # ===================== culculate next dispatch =====================

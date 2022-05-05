@@ -6,6 +6,12 @@ import pandas as pd
 from domain.arrive_info import ArriveInfo
 
 
+# random.seed(1234)
+# np.random.seed(1234)
+# torch.manual_seed(1234)
+# torch.cuda.manual_seed_all(1234)
+# torch.backends.cudnn.deterministic = True
+
 class Order(object):
     def __init__(
         self,

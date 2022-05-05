@@ -1,6 +1,11 @@
 from typing import Any, Dict, Tuple
 import numpy as np
 
+# random.seed(1234)
+np.random.seed(1234)
+# torch.manual_seed(1234)
+# torch.cuda.manual_seed_all(1234)
+# torch.backends.cudnn.deterministic = True
 
 class FeatureManager:
     def __init__(self, k: int):

@@ -10,6 +10,12 @@ from domain import AreaMode, DispatchMode
 from modules.dispatch import DispatchOrder
 
 
+# random.seed(1234)
+np.random.seed(1234)
+# torch.manual_seed(1234)
+# torch.cuda.manual_seed_all(1234)
+# torch.backends.cudnn.deterministic = True
+
 @dataclass
 class StaticsService:
     def __init__(self):

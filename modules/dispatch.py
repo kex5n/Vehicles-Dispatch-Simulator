@@ -14,6 +14,12 @@ from objects.area import AreaManager
 from objects.vehicle import VehicleManager
 
 
+random.seed(1234)
+np.random.seed(1234)
+torch.manual_seed(1234)
+torch.cuda.manual_seed_all(1234)
+torch.backends.cudnn.deterministic = True
+
 @dataclass(frozen=True)
 class DispatchOrder:
     vehicle_id: int

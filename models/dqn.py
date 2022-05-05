@@ -10,6 +10,12 @@ from torch import nn
 from torch import optim
 import torch.nn.functional as F
 
+random.seed(1234)
+np.random.seed(1234)
+torch.manual_seed(1234)
+torch.cuda.manual_seed_all(1234)
+torch.backends.cudnn.deterministic = True
+
 BATCH_SIZE = 64
 CAPACITY = 500
 GAMMA = 0.9
@@ -42,12 +48,13 @@ class Q:
         self.model = nn.Sequential()
         self.model.add_module("fc1", nn.Linear(num_states, 32))
         self.model.add_module("relu1", nn.ReLU())
-        self.model.add_module("fc2", nn.Linear(32, 32))
+        self.model.add_module("fc2", nn.Linear(32, 64))
         self.model.add_module("relu2", nn.ReLU())
-        self.model.add_module("fc3", nn.Linear(32, num_actions))
+        self.model.add_module("fc3", nn.Linear(64, 32))
+        self.model.add_module("relu3", nn.ReLU())
+        self.model.add_module("fc4", nn.Linear(32, num_actions))
         self.print = True
 
-        print(self.model)
         self.optimizer = optim.Adam(self.model.parameters(), lr=0.0001)
 
     def replay(self, area_manager: AreaManager, date_info, episode=None):

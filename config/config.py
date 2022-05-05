@@ -5,6 +5,12 @@ import yaml
 from domain import AreaMode, DemandPredictionMode, DispatchMode, LocalRegionBound
 
 
+# random.seed(1234)
+np.random.seed(1234)
+# torch.manual_seed(1234)
+# torch.cuda.manual_seed_all(1234)
+# torch.backends.cudnn.deterministic = True
+
 @dataclass(frozen=True)
 class Config:
     DATA_SIZE: str

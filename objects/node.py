@@ -4,6 +4,12 @@ import numpy as np
 import pandas as pd
 
 
+# random.seed(1234)
+np.random.seed(1234)
+# torch.manual_seed(1234)
+# torch.cuda.manual_seed_all(1234)
+# torch.backends.cudnn.deterministic = True
+
 class Node:
     def __init__(self, id: int, node_index: int,longitude: float, latitude: float):
         self.id: int = id

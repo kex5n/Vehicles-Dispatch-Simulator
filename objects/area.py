@@ -7,6 +7,12 @@ from typing import Dict, List, Mapping
 from objects.order import Order
 
 
+# random.seed(1234)
+# np.random.seed(1234)
+# torch.manual_seed(1234)
+# torch.cuda.manual_seed_all(1234)
+# torch.backends.cudnn.deterministic = True
+
 @dataclass
 class Schedule:
     vehicle_id: int
