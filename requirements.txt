@@ -6,3 +6,5 @@ scikit-learn==1.0.2
 networkx==2.6.3
 PyYAML==6.0
 torch==1.11.0
+jupyterlab==3.2.9
+tqdm==4.62.3
