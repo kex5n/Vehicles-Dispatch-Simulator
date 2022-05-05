@@ -85,10 +85,9 @@ class Q:
     def decide_action(self, state, episode, candidate_area_ids: List[int], is_train: bool = False):
         # action is the index of next_area_id in candidate_area_ids.
         reshape_state = state.reshape(1, -1)
-        epsilone = 0.5 * (1 / (episode+1))
+        epsilone = 1 * (1 / (episode+1))
         if is_train:
-            if (episode > 1) and (epsilone <= np.random.uniform(0, 1)):
-            # if epsilone <= np.random.uniform(0, 1):
+            if epsilone <= np.random.uniform(0, 1):
                 self.model.eval()
                 with torch.no_grad():
                     values = self.model(reshape_state)
@@ -97,24 +96,11 @@ class Q:
                     values[0][mask] = -np.inf
                     action = torch.LongTensor([[values.max(1)[1].view(1, 1)]])
             else:
-                if (episode < 1):
-                # if False:
-                    if (0.9 >= np.random.uniform(0, 1)):
-                        action = torch.LongTensor([[
-                            candidate_area_ids.index(4)
-                        ]])
-                    else:
-                        action = torch.LongTensor([[
-                            random.choice(
-                                range(len(candidate_area_ids))
-                            )
-                        ]])
-                else:
-                    action = torch.LongTensor([[
-                        random.choice(
-                            range(len(candidate_area_ids))
-                        )
-                    ]])
+                action = torch.LongTensor([[
+                    random.choice(
+                        range(len(candidate_area_ids))
+                    )
+                ]])
         else:
             self.model.eval()
             with torch.no_grad():

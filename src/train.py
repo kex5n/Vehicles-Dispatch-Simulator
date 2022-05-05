@@ -20,7 +20,7 @@ from modules.state import FeatureManager
 from simulator.simulator import Simulator
 from util import DataModule
 
-USE_WANDB = False
+USE_WANDB = True
 
 if __name__ == "__main__":
     config = Config.load()
@@ -125,7 +125,7 @@ if __name__ == "__main__":
 
                 area_manager = simulator.area_manager
                 vehicle_manager = simulator.vehicle_manager
-                
+
                 # for debug
                 after_num_idle_vehicles = [area.num_idle_vehicles for area in area_manager.get_area_list()]
                 # ===================== calculate next state =====================
@@ -133,7 +133,7 @@ if __name__ == "__main__":
                     start_time=start_datetime_of_this_timeslice,
                     end_time=end_datetime_of_this_timeslice,
                 )
-                
+
                 demand_array = np.zeros(area_manager.num_areas)
                 for order in order_list:
                     area_id = area_manager.node_id_to_area(order.pick_up_node_id).id
@@ -169,7 +169,6 @@ if __name__ == "__main__":
                     action_list.append(action)
                     feature_manager.register_reward(vehicle_id=vehicle.id, reward=reward)
                 # =================================================================
-                breakpoint()
                 if USE_WANDB:
                     wandb.log({'num_dispatched_vehicle': len(from_area_id_list)})
                     wandb.log({'num_to_area_4': to_area_id_list.count(4)})
@@ -190,7 +189,7 @@ if __name__ == "__main__":
                         to_area_id=feature["to_area_id"],
                     )
                 loss = dispatch_module.train(area_manager=area_manager, date_info=start_datetime_of_this_timeslice, episode=episode)
-                
+
 
                 if USE_WANDB:
                     wandb.log({'loss': loss})

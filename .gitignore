@@ -109,3 +109,5 @@ data/*.pbf
 outputs/*
 submit
 models/checkpoints/
+wandb
+modules/dummy_data
