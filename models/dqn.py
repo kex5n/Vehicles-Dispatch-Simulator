@@ -77,9 +77,6 @@ class Q:
         self.model.train()
         loss = F.smooth_l1_loss(state_action_values.flatten(), expected_state_action_values)
 
-        if (date_info.day >= 10) and (date_info.hour >= 13) and (from_area_id_batch.tolist().count(4) > 0):
-            breakpoint()
-
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
@@ -88,8 +85,6 @@ class Q:
     def decide_action(self, state, episode, candidate_area_ids: List[int], is_train: bool = False):
         # action is the index of next_area_id in candidate_area_ids.
         reshape_state = state.reshape(1, -1)
-        # epsilones = [0.9, 0.9, 0.8, 0.75, 0.7, 0.65, 0.6, 0.55, 0.5, 0.45, 0.4, 0.35, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05]
-        # epsilone = epsilones[episode]
         epsilone = 0.5 * (1 / (episode+1))
         if is_train:
             if (episode > 1) and (epsilone <= np.random.uniform(0, 1)):
@@ -103,6 +98,7 @@ class Q:
                     action = torch.LongTensor([[values.max(1)[1].view(1, 1)]])
             else:
                 if (episode < 1):
+                # if False:
                     if (0.9 >= np.random.uniform(0, 1)):
                         action = torch.LongTensor([[
                             candidate_area_ids.index(4)
@@ -127,9 +123,6 @@ class Q:
                 mask[:len(candidate_area_ids)] = False
                 values[0][mask] = -np.inf
                 action = torch.LongTensor([[values.max(1)[1].view(1, 1)]])
-                if (candidate_area_ids[action[0][0]] != 4) :
-                    breakpoint()
-                    print()
         action = int(action[0][0])
         return action
 

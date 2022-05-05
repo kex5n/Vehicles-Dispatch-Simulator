@@ -20,7 +20,7 @@ from modules.state import FeatureManager
 from simulator.simulator import Simulator
 from util import DataModule
 
-USE_WANDB = True
+USE_WANDB = False
 
 if __name__ == "__main__":
     config = Config.load()
@@ -169,6 +169,7 @@ if __name__ == "__main__":
                     action_list.append(action)
                     feature_manager.register_reward(vehicle_id=vehicle.id, reward=reward)
                 # =================================================================
+                breakpoint()
                 if USE_WANDB:
                     wandb.log({'num_dispatched_vehicle': len(from_area_id_list)})
                     wandb.log({'num_to_area_4': to_area_id_list.count(4)})

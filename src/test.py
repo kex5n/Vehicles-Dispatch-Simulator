@@ -24,7 +24,7 @@ if __name__ == "__main__":
     simulate_start_time = datetime.now()
     dqn_checkpoint_path = (
         Path(__file__).parents[1] / "models" / "checkpoints" / "dqn" 
-        / "2022-5-5_14:17:25" / "episode4.cpt"
+        / "2022-5-5_14:45:6" / "episode2.cpt"
     )
     # init modules
     simulator = Simulator(

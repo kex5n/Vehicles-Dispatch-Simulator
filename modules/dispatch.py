@@ -77,8 +77,6 @@ class DQNDispatch(DispatchModuleInterface):
         )
         state_array = torch.FloatTensor(state_list)
         action = self.model.get_action(state_array, episode=episode, candidate_area_ids=candidate_area_id, is_train=is_train)
-        # if candidate_area_id[0] == 3:
-        #     breakpoint()
         next_area_id = candidate_area_id[action]
         next_node_id = area_manager.get_area_by_area_id(next_area_id).centroid
         return DispatchOrder(
