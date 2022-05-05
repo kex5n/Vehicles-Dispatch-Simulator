@@ -92,20 +92,17 @@ class Q:
         # epsilone = epsilones[episode]
         epsilone = 0.5 * (1 / (episode+1))
         if is_train:
-            # if (episode > 1) and (epsilone <= np.random.uniform(0, 1)):
-            if epsilone <= np.random.uniform(0, 1):
+            if (episode > 1) and (epsilone <= np.random.uniform(0, 1)):
+            # if epsilone <= np.random.uniform(0, 1):
                 self.model.eval()
                 with torch.no_grad():
                     values = self.model(reshape_state)
                     mask = np.array([True for _ in range(self.num_actions)])
                     mask[:len(candidate_area_ids)] = False
                     values[0][mask] = -np.inf
-                    # if (episode == 2) and (candidate_area_ids[0] == 3):
-                    #     breakpoint()
                     action = torch.LongTensor([[values.max(1)[1].view(1, 1)]])
             else:
-                # if (episode < 1):
-                if False:
+                if (episode < 1):
                     if (0.9 >= np.random.uniform(0, 1)):
                         action = torch.LongTensor([[
                             candidate_area_ids.index(4)
@@ -130,7 +127,7 @@ class Q:
                 mask[:len(candidate_area_ids)] = False
                 values[0][mask] = -np.inf
                 action = torch.LongTensor([[values.max(1)[1].view(1, 1)]])
-                if (candidate_area_ids[0] == 3) and (candidate_area_ids[action[0][0]] != 4) :
+                if (candidate_area_ids[action[0][0]] != 4) :
                     breakpoint()
                     print()
         action = int(action[0][0])
