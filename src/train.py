@@ -49,7 +49,8 @@ if __name__ == "__main__":
         neighbor_can_server=config.NELGHBOR_CAN_SERVER,
         minutes=config.MINUTES,
         pick_up_time_window=config.PICKUPTIMEWINDOW,
-        debug=config.DEBUG,
+        data_size=config.DATA_SIZE,
+        debug_=config.DEBUG,
     )
     reward_culcurator = RewardCalculator()
     demand_predictor: DemandPredictorInterface = load_demand_prediction_component(

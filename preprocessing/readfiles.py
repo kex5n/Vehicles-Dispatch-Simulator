@@ -116,25 +116,26 @@ def read_driver(input_file_path="./data/Drivers0601.csv") -> np.ndarray:
 
 
 def read_all_files(
-    order_file_date: str, demand_prediction_mode: DemandPredictionMode, debug: bool = True
+    order_file_date: str, demand_prediction_mode: DemandPredictionMode, data_size: str, debug_: bool = True
 ) -> Tuple[pd.DataFrame, List[int], pd.DataFrame, np.ndarray, pd.DataFrame]:
     node_path = os.path.join(os.getcwd(), "data", "Node.csv")
     if demand_prediction_mode == DemandPredictionMode.TRAIN:
         directory = "train"
     else:
         directory = "test"
-    if True:
+    if debug_:
         directory = "dummy"
     orders_path = os.path.join(
         os.getcwd(),
         "data",
+        data_size,
         "Order",
         "modified",
         directory,
         "order_2016" + order_file_date + ".csv",
     )
-    vehicles_path = os.path.join(os.getcwd(), "data", "Drivers0601.csv")
-    map_path = os.path.join(os.getcwd(), "data", "AccurateMap.csv")
+    vehicles_path = os.path.join(os.getcwd(), "data", data_size, "Drivers0601.csv")
+    map_path = os.path.join(os.getcwd(), "data", data_size, "AccurateMap.csv")
 
     node_df = read_node(node_path)
     node_id_list = read_node_id_list(node_path)

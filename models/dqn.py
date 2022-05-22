@@ -69,7 +69,10 @@ class Q:
         from_area_id_batch = torch.from_numpy(np.array(batch.from_area_id))
         to_area_id_batch = torch.from_numpy(np.array(batch.to_area_id))
         self.model.eval()
-        state_action_values = self.model(state_batch).gather(1, action_batch)
+        try:
+            state_action_values = self.model(state_batch).gather(1, action_batch)
+        except:
+            breakpoint()
 
         # select max next_state value from masked next_state values
         next_state_values = self.model(next_states)

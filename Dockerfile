@@ -1,4 +1,4 @@
-FROM python:3.9 AS experiment
+FROM python:3.9
 
 COPY ./requirements.txt ./
 RUN pip install -U pip && pip install -r requirements.txt
@@ -13,3 +13,5 @@ WORKDIR /usr/src
 
 ENV TZ Asia/Tokyo
 ENV PYTHONPATH /usr/src
+
+ENTRYPOINT "/bin/bash"

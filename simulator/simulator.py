@@ -1,6 +1,7 @@
 from collections import namedtuple
 from copy import deepcopy
 import datetime
+import glob
 import json
 import os
 import random
@@ -57,6 +58,7 @@ class Simulator(object):
         area_mode: AreaMode,
         demand_prediction_mode: DemandPredictionMode,
         dispatch_mode: DispatchMode,
+        data_size: str,
         vehicles_number: int,
         time_periods: np.timedelta64,
         local_region_bound: LocalRegionBound,
@@ -65,7 +67,7 @@ class Simulator(object):
         neighbor_can_server: bool,
         minutes: int,
         pick_up_time_window: np.float64,
-        debug: bool =False
+        debug_: bool =False
     ):
         self.__node_manager: NodeManager = None
         self.order_manager: OrderManager = None
@@ -82,7 +84,8 @@ class Simulator(object):
         self.__minutes: int = minutes
         self.__pick_up_time_window: np.float64 = pick_up_time_window
         self.__local_region_bound: LocalRegionBound = local_region_bound
-        self.__debug: bool = debug
+        self.data_size = data_size
+        self.debug_: bool = debug_
 
         # Weather data
         # TODO: MUST CHANGE
@@ -190,7 +193,7 @@ class Simulator(object):
             order_df,
             vehicles,
             self.__cost_map,
-        ) = read_all_files(order_file_date, self.demand_prediction_mode, debug=self.__debug)
+        ) = read_all_files(order_file_date, self.demand_prediction_mode, self.data_size, debug_=self.debug_)
 
         print("Create Nodes")
         self.__node_manager = NodeManager(node_df)
@@ -263,8 +266,8 @@ class Simulator(object):
             directory = "train"
         else:
             directory = "test"
-        if True:
-            directory = "dummy"
+        # if True:
+        #     directory = "dummy"
         order_df = read_order(
             input_file_path=base_data_path
             / directory
@@ -320,8 +323,8 @@ class Simulator(object):
             directory = "train"
         else:
             directory = "test"
-        if True:
-            directory = "dummy"
+        # if True:
+        #     directory = "dummy"
         order_df = read_order(
             input_file_path=base_data_path
             / directory
@@ -493,15 +496,9 @@ class Simulator(object):
 
     def __create_cluster(self) -> List[Area]:
         node_id_list: np.ndarray = self.__node_manager.node_id_list
-        clusters = [Cluster(id=i) for i in range(self.num_areas)]
-
-        cluster_path = (
-            "./data/"
-            + f"({str(self.__local_region_bound)})"
-            + str(self.num_areas)
-            + str(self.area_mode.value)
-            + "Cluster.csv"
-        )
+        cluster_path = glob.glob(f"./data/{self.data_size}/*{str(self.area_mode.value)}Cluster.csv")[0]
+        cluster_ids = set(pd.read_csv(cluster_path)["GridID"])
+        clusters = [Cluster(id=i) for i in cluster_ids]
         if os.path.exists(cluster_path):
             label_pred_df: pd.DataFrame = pd.read_csv(cluster_path)
             label_pred: np.ndarray = label_pred_df["GridID"].values
@@ -512,17 +509,21 @@ class Simulator(object):
 
         # Loading Clustering results into simulator
         print("Loading Clustering results")
-        for i in range(self.num_areas):
-            tmp_node_id_list = node_id_list[label_pred == i]
-            centroid_node_id = label_pred_df[(label_pred_df["GridID"]==i) & (label_pred_df["IsCentroid"]==True)]["NodeID"].values[0]
+        for i, cluster_id in enumerate(cluster_ids):
+            tmp_node_id_list = node_id_list[label_pred == cluster_id]
+            try:
+                centroid_node_id = label_pred_df[(label_pred_df["GridID"]==cluster_id) & (label_pred_df["IsCentroid"]==True)]["NodeID"].values[0]
+            except:
+                breakpoint()
             clusters[i].set_centroid(centroid_node_id)
             for node_id in tmp_node_id_list:
                 clusters[i].set_node_id(node_id)
 
         save_cluster_neighbor_path = (
             "./data/"
+            + self.data_size + "/"
             + f"({str(self.__local_region_bound)})"
-            + str(self.num_areas)
+            + str(len(cluster_ids))
             + str(self.area_mode)
             + "Neighbor.csv"
         )

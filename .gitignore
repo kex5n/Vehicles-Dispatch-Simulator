@@ -103,7 +103,8 @@ venv.bak/
 # mypy
 .mypy_cache/
 
-data/Order
+data/medium
+data/small
 data/*.csv
 data/*.pbf
 *.DS_Store
