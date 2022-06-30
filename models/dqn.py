@@ -1,4 +1,5 @@
 from collections import namedtuple
+from copy import deepcopy
 import random
 from typing import List
 
@@ -17,8 +18,9 @@ torch.cuda.manual_seed_all(1234)
 torch.backends.cudnn.deterministic = True
 
 BATCH_SIZE = 64
-CAPACITY = 500
-GAMMA = 0.9
+SAMPLE_SIZE = 2560
+CAPACITY = 12800
+GAMMA = 0.6
 
 Transition = namedtuple("Transition", ("state", "action", "next_state", "reward", "from_area_id", "to_area_id"))
 
@@ -26,20 +28,21 @@ Transition = namedtuple("Transition", ("state", "action", "next_state", "reward"
 class ReplayMemory:
     def __init__(self, capacity=500):
         self.__capacity = capacity
-        self.__memory = []
+        self.memory = []
         self.__index = 0
 
     def memorize(self, state: np.ndarray, action: int, next_state: np.ndarray, reward: float, from_area_id: int, to_area_id: int) -> None:
-        if len(self.__memory) < self.__capacity:
-            self.__memory.append(None)
-            self.__memory[self.__index] = Transition(state, action, next_state, reward, from_area_id, to_area_id)
+        if len(self.memory) < self.__capacity:
+            self.memory.append(Transition(state, action, next_state, reward, from_area_id, to_area_id))
+        else:
+            self.memory[self.__index] = Transition(state, action, next_state, reward, from_area_id, to_area_id)
             self.__index = (self.__index + 1) % self.__capacity
 
     def sample(self, batch_size) -> List[Transition]:
-        return random.sample(self.__memory, batch_size)
+        return random.sample(self.memory, batch_size)
 
     def __len__(self) -> int:
-        return len(self.__memory)
+        return len(self.memory)
 
 class Q:
     def __init__(self, num_states: int, num_actions: int):
@@ -58,46 +61,52 @@ class Q:
         self.optimizer = optim.Adam(self.model.parameters(), lr=0.0001)
 
     def replay(self, area_manager: AreaManager, date_info, episode=None):
-        if len(self.memory) < BATCH_SIZE:
+        if len(self.memory) < SAMPLE_SIZE:
             return
-        transitions = self.memory.sample(BATCH_SIZE)
-        batch = Transition(*zip(*transitions))
-        state_batch = torch.tensor(torch.from_numpy(np.array(batch.state)), dtype=torch.float32)
-        action_batch = torch.from_numpy(np.array(batch.action)).reshape(-1,1)
-        reward_batch = torch.from_numpy(np.array(batch.reward))
-        next_states = torch.tensor(torch.from_numpy(np.array(batch.next_state)), dtype=torch.float32)
-        from_area_id_batch = torch.from_numpy(np.array(batch.from_area_id))
-        to_area_id_batch = torch.from_numpy(np.array(batch.to_area_id))
-        self.model.eval()
-        try:
+        losses = []
+        memory = deepcopy(self.memory.memory)
+        random.shuffle(memory)
+        batch_counter = 0
+        while batch_counter <= SAMPLE_SIZE:
+            before_batch_counter = batch_counter
+            batch_counter += BATCH_SIZE
+            transitions = memory[before_batch_counter:batch_counter]
+            batch = Transition(*zip(*transitions))
+            state_batch = torch.tensor(torch.from_numpy(np.array(batch.state)), dtype=torch.float32)
+            action_batch = torch.from_numpy(np.array(batch.action)).reshape(-1,1)
+            reward_batch = torch.from_numpy(np.array(batch.reward))
+            next_states = torch.tensor(torch.from_numpy(np.array(batch.next_state)), dtype=torch.float32)
+            to_area_id_batch = torch.from_numpy(np.array(batch.to_area_id))
+            self.model.eval()
             state_action_values = self.model(state_batch).gather(1, action_batch)
-        except:
-            breakpoint()
 
-        # select max next_state value from masked next_state values
-        next_state_values = self.model(next_states)
-        mask = np.array([[True for _ in range(self.num_actions)] for _ in range(len(next_states))])
-        for i, to_area_id in enumerate(to_area_id_batch):
-            to_area = area_manager.get_area_by_area_id(int(to_area_id))
-            num_candidates = to_area.num_neighbors + 1
-            mask[i, :num_candidates] = False
-        next_state_values[mask] = -np.inf
-        max_next_states = next_state_values.max(1)[0]
-        expected_state_action_values = reward_batch + GAMMA * max_next_states
-        self.model.train()
-        loss = F.smooth_l1_loss(state_action_values.flatten(), expected_state_action_values)
+            # select max next_state value from masked next_state values
+            next_state_values = self.model(next_states)
+            mask = np.array([[True for _ in range(self.num_actions)] for _ in range(len(next_states))])
+            for i, to_area_id in enumerate(to_area_id_batch):
+                to_area = area_manager.get_area_by_area_id(int(to_area_id))
+                num_candidates = to_area.num_neighbors + 1
+                mask[i, :num_candidates] = False
+            next_state_values[mask] = -np.inf
+            max_next_states = next_state_values.max(1)[0]
+            expected_state_action_values = reward_batch + GAMMA * max_next_states
+            self.model.train()
+            loss = F.smooth_l1_loss(state_action_values.flatten(), expected_state_action_values)
 
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-        return loss.detach()
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+            
+            losses += loss.detach().flatten()
+            
+        return losses
 
     def decide_action(self, state, episode, candidate_area_ids: List[int], is_train: bool = False):
         # action is the index of next_area_id in candidate_area_ids.
         reshape_state = state.reshape(1, -1)
-        epsilone = 1 * (1 / (episode+1))
+        epsilone = 0.5 * (1 / ((episode)+1))
         if is_train:
-            if epsilone <= np.random.uniform(0, 1):
+            if  epsilone <= np.random.uniform(0, 1):
                 self.model.eval()
                 with torch.no_grad():
                     values = self.model(reshape_state)
@@ -106,11 +115,22 @@ class Q:
                     values[0][mask] = -np.inf
                     action = torch.LongTensor([[values.max(1)[1].view(1, 1)]])
             else:
+                # if 0.5 <= np.random.uniform(0, 1):
                 action = torch.LongTensor([[
                     random.choice(
                         range(len(candidate_area_ids))
                     )
                 ]])
+                # else:
+                #     max_idx = -1
+                #     max_diff = -np.inf
+                #     flat_state = reshape_state[0].tolist()
+                #     for i in range(len(candidate_area_ids)):
+                #         if max_diff < flat_state[i*2+1] - flat_state[i*2+2]:
+                #             max_diff = flat_state[i*2+1] - flat_state[i*2+2]
+                #             max_idx = i
+                #     action = torch.LongTensor([[max_idx]])
+                             
         else:
             self.model.eval()
             with torch.no_grad():
@@ -119,10 +139,16 @@ class Q:
                 mask[:len(candidate_area_ids)] = False
                 values[0][mask] = -np.inf
                 action = torch.LongTensor([[values.max(1)[1].view(1, 1)]])
+            # if (not candidate_area_ids[0] in (30, 49, 50, 51, 47, 44, 46)) and (30 in candidate_area_ids):
+            #     breakpoint()
+            # if (candidate_area_ids[0] == 6) and (candidate_area_ids[action[0][0]]==13):
+            #     breakpoint()
         action = int(action[0][0])
         return action
 
     def memorize(self, state, action, next_state, reward, from_area_id, to_area_id):
+        if state is None:
+            breakpoint()
         self.memory.memorize(
             state=state,
             action=action,
@@ -134,7 +160,7 @@ class Q:
 
 class DQN:
     def __init__(self, k: int, num_actions: int):
-        self.Q = Q(num_states=3+k*2, num_actions=num_actions)
+        self.Q = Q(num_states=3+k*2+4, num_actions=num_actions)
 
     def update_q_function(self, area_manager: AreaManager, date_info, episode=None):
         return self.Q.replay(area_manager=area_manager, date_info=date_info, episode=episode)

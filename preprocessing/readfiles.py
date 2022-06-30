@@ -123,8 +123,6 @@ def read_all_files(
         directory = "train"
     else:
         directory = "test"
-    if debug_:
-        directory = "dummy"
     orders_path = os.path.join(
         os.getcwd(),
         "data",

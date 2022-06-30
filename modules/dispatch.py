@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from copy import deepcopy
 import random
 from typing import List
 
@@ -7,6 +8,7 @@ import torch
 
 from config import Config
 from domain import DispatchMode
+from domain.demand_prediction_mode import DemandPredictionMode
 from models import DQN
 from modules.state import FeatureManager
 from objects import Area, Vehicle
@@ -67,24 +69,36 @@ class RandomDispatch(DispatchModuleInterface):
 
 
 class DQNDispatch(DispatchModuleInterface):
-    def __init__(self, config: Config, is_train=False):
-        self.model = DQN(k=config.K, num_actions=9)
-        self.__feature_manager = FeatureManager(k=config.K)
+    def __init__(self, config: Config, is_train):
+        self.model = DQN(k=config.K, num_actions=config.K+1)
+        if is_train:
+            self.feature_manager = FeatureManager(k=config.K, mode=DemandPredictionMode.TRAIN)
+        else:
+            self.feature_manager = FeatureManager(k=config.K, mode=DemandPredictionMode.TEST)
         self.is_train = is_train
+        self.num_neighbors = config.K
 
-    def dispatch(self, area_manager: AreaManager, vehicle: Vehicle, prediction, episode: int = 0, is_train: bool = False) -> DispatchOrder:
+    def dispatch(self, area_manager: AreaManager, vehicle: Vehicle, prediction, supply_array, next_timeslice_datetime, feature_manager: FeatureManager = None, episode: int = 0, is_train: bool = False) -> DispatchOrder:
         current_area = area_manager.get_area_by_area_id(vehicle.location_area_id)
-        candidate_area_id = [current_area.id] + current_area.get_neighbor_ids()
-        supply_array = np.array([area.num_idle_vehicles for area in area_manager.get_area_list()])
-        state_list = self.__feature_manager.calc_state(
+        candidate_area_id = ([current_area.id] + current_area.get_neighbor_ids()[:self.num_neighbors])
+        # supply_array = np.array([area.num_idle_vehicles for area in area_manager.get_area_list()])
+        state_list = self.feature_manager.calc_state(
             area=current_area,
             demand_array=prediction,
-            supply_array=supply_array
+            supply_array=supply_array,
+            next_timeslice_datetime=next_timeslice_datetime,
         )
         state_array = torch.FloatTensor(state_list)
         action = self.model.get_action(state_array, episode=episode, candidate_area_ids=candidate_area_id, is_train=is_train)
         next_area_id = candidate_area_id[action]
         next_node_id = area_manager.get_area_by_area_id(next_area_id).centroid
+
+        if is_train:
+            feature_manager.register_state(vehicle_id=vehicle.id, state_array=state_list)
+            feature_manager.register_action(vehicle_id=vehicle.id, action=action)
+            feature_manager.register_from_area_id(vehicle_id=vehicle.id, from_area_id=current_area.id)
+            feature_manager.register_to_area_id(vehicle_id=vehicle.id, to_area_id=next_area_id)
+        
         return DispatchOrder(
             vehicle_id=vehicle.id,
             start_node_id=vehicle.location_node_id,
@@ -106,20 +120,49 @@ class DQNDispatch(DispatchModuleInterface):
     def load(self, checkpoint_path: str) -> None:
         self.model.load_checkpoint(checkpoint_path)
 
-    def __call__(self, area_manager: AreaManager, vehicle_manager: VehicleManager, prediction: np.ndarray, episode: int = 0) -> List[DispatchOrder]:
+    def __call__(self, area_manager: AreaManager, vehicle_manager: VehicleManager, prediction: np.ndarray, next_timeslice_datetime, feature_manager=None, episode: int = 0) -> List[DispatchOrder]:
         dispatch_order_list: List[DispatchOrder] = []
+        supply_array = np.array([area.num_idle_vehicles for area in area_manager.get_area_list()])
+        idle_vehicle_ids = []
         for area in area_manager.get_area_list():
-            for vehicle_id in area.get_idle_vehicle_ids():
-                vehicle = vehicle_manager.get_vehicle_by_vehicle_id(vehicle_id)
-                dispatch_order = self.dispatch(
-                    area_manager=area_manager,
-                    vehicle=vehicle,
-                    episode=episode,
-                    prediction=prediction,
-                    is_train=self.is_train,
-                )
-                dispatch_order_list.append(dispatch_order)
+            idle_vehicle_ids += area.get_idle_vehicle_ids()
+        idle_vehicles = [vehicle_manager.get_vehicle_by_vehicle_id(i) for i in idle_vehicle_ids]
+        vehicle_selector = VehicleSelector(idle_vehicles)
+        for vehicle in vehicle_selector:
+            dispatch_order = self.dispatch(
+                area_manager=area_manager,
+                vehicle=vehicle,
+                episode=episode,
+                supply_array=supply_array,
+                prediction=prediction,
+                next_timeslice_datetime=next_timeslice_datetime,
+                feature_manager=feature_manager,
+                is_train=self.is_train,
+            )
+            dispatch_order_list.append(dispatch_order)
+            supply_array[dispatch_order.from_area_id] -= 1
+            supply_array[dispatch_order.to_area_id] += 1
+            if supply_array[dispatch_order.from_area_id] < 0:
+                breakpoint()
         return dispatch_order_list
+
+
+class VehicleSelector:
+    def __init__(self, vehicles):
+        random.shuffle(vehicles)
+        self.vehicles = vehicles
+        self.i = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.i == len(self.vehicles):
+            raise StopIteration()
+        else:
+            i = self.i
+            self.i += 1
+            return self.vehicles[i]
         
 
 def load_dispatch_component(dispatch_mode: DispatchMode, config: Config, is_train=False) -> DispatchModuleInterface:
