@@ -47,7 +47,7 @@ np.random.seed(1234)
 
 ###########################################################################
 
-DATA_PATH = "./data/Order/modified"
+DATA_PATH = "./data/medium/Order/modified"
 
 base_data_path = Path(DATA_PATH)
 
@@ -67,6 +67,7 @@ class Simulator(object):
         neighbor_can_server: bool,
         minutes: int,
         pick_up_time_window: np.float64,
+        is_train: bool,
         debug_: bool =False
     ):
         self.__node_manager: NodeManager = None
@@ -85,31 +86,8 @@ class Simulator(object):
         self.__pick_up_time_window: np.float64 = pick_up_time_window
         self.__local_region_bound: LocalRegionBound = local_region_bound
         self.data_size = data_size
+        self.is_train = is_train
         self.debug_: bool = debug_
-
-        # Weather data
-        # TODO: MUST CHANGE
-        # ------------------------------------------
-        # fmt: off
-        self.weather_type = np.array([2,1,1,1,1,0,1,2,1,1,3,3,3,3,3,
-                                     3,3,0,0,0,2,1,1,1,1,0,1,0,1,1,
-                                     1,3,1,1,0,2,2,1,0,0,2,3,2,2,2,
-                                     1,2,2,2,1,0,0,2,2,2,1,2,1,1,1])
-        self.minimum_temperature = np.array([12,12,11,12,14,12,9,8,7,8,9,7,9,10,11,
-                                            12,13,13,11,11,11,6,5,5,4,4,6,6,5,6])
-        self.maximum_temperature = np.array([17,19,19,20,20,19,13,12,13,15,16,18,18,19,19,
-                                            18,20,21,19,20,19,12,9,9,10,13,12,12,13,15])
-        self.wind_direction = np.array([1,2,0,2,7,6,3,2,3,7,1,0,7,1,7,
-                                       0,0,7,0,7,7,7,0,7,5,7,6,6,7,7])
-        self.wind_power = np.array([1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-                                   1,1,1,1,1,1,2,1,1,1,1,1,1,1,1])
-        # fmt: on
-        self.weather_type = self.__normalization_1d(self.weather_type)
-        self.minimum_temperature = self.__normalization_1d(self.minimum_temperature)
-        self.maximum_temperature = self.__normalization_1d(self.maximum_temperature)
-        self.wind_direction = self.__normalization_1d(self.wind_direction)
-        self.wind_power = self.__normalization_1d(self.wind_power)
-        # ------------------------------------------
 
         # Input parameters
         self.area_mode: AreaMode = area_mode
@@ -123,13 +101,6 @@ class Simulator(object):
             self.num_grid_height,
             self.neighbor_server_deep_limit,
         ) = self.__calculate_the_scale_of_devision()
-        print("----------------------------")
-        print("The width of each grid", self.side_length_meter, "km")
-        print("Vehicle service range", self.vehicle_service_meter, "km")
-        print("Number of grids in east-west direction", self.num_grid_width)
-        print("Number of grids in north-south direction", self.num_grid_height)
-        print("Number of grids", self.num_areas)
-        print("----------------------------")
 
         # Control variable
         self.neighbor_can_server = neighbor_can_server
@@ -199,16 +170,18 @@ class Simulator(object):
         self.__node_manager = NodeManager(node_df)
         print("Create Orders set")
         self.order_manager = OrderManager(
-            order_df=order_df, 
+            order_df=order_df,
             pick_up_time_window=self.__pick_up_time_window,
         )
 
         if self.area_mode == AreaMode.GRID:
             print("Create Grids")
             self.area_manager.set_area_list(self.__create_grid())
+            print(f"number of grid: {self.area_manager.num_areas}")
         else:
             print("Create Clusters")
             self.area_manager.set_area_list(self.__create_cluster())
+            print(f"number of cluster: {self.area_manager.num_areas}")
 
         for area in self.area_manager.get_area_list():
             for node_id in area.get_node_ids():
@@ -352,7 +325,7 @@ class Simulator(object):
         node_manager: NodeManager,
         vehicle_manager: VehicleManager,
     ) -> None:
-        candidate_areas = [area for area in area_manager.get_area_list() if area.id != 4]
+        candidate_areas = [area for area in area_manager.get_area_list()]
         for vehicle in vehicle_manager.get_vehicle_list():
             random_area = random.choice(candidate_areas)
             random_node_id = random.choice(random_area.get_node_ids())
@@ -651,11 +624,13 @@ class Simulator(object):
         the neighbor car search system to determine the search range according to the set search distance
         and the size of the grid. It use dfs to find the nearest idle vehicles in the area.
         """
+        match_count = {i:0 for i in range(self.area_manager.num_areas)}
+
         for area in self.area_manager.get_area_list():
             area.per_match_idle_vehicles = area.num_idle_vehicles
-        # if (self.real_time_in_experiment.day == 25):
-        #     breakpoint()
-        while self.order_manager.now_order.order_time < self.real_time_in_experiment + self.time_periods:
+
+        end_time = self.real_time_in_experiment + self.time_periods
+        while self.order_manager.now_order.order_time < end_time:
             if not self.order_manager.has_next:
                 break
             self.__static_service.increment_order_num()
@@ -671,6 +646,8 @@ class Simulator(object):
                     # Find a nearest car to match the current order
                     # --------------------------------------
                     for vehicle_id in order_occurred_area.get_idle_vehicle_ids():
+                        if self.is_train and order_occurred_area.num_idle_vehicles <= 3:
+                            continue
                         vehicle = self.vehicle_manager.get_vehicle_by_vehicle_id(vehicle_id)
                         tmp_road_cost = self.__road_cost(
                             start_node_index=self.__node_manager.get_node_index(
@@ -702,6 +679,8 @@ class Simulator(object):
                     self.order_manager.now_order.set_arrive_info(ArriveInfo.REJECT)
                 # Successfully matched a vehicle
                 else:
+                    match_count[order_occurred_area.id] += 1
+
                     matched_vehicle: Vehicle = matched_info.matched_vehicle
                     road_cost: int = matched_info.road_cost
                     order_occurred_area: Area = matched_info.order_occurred_area
@@ -754,7 +733,23 @@ class Simulator(object):
             # The current order has been processed and start processing the next order
             # ------------------------------
             # breakpoint()
+            
             self.order_manager.increment()
+
+        if not self.is_train:
+            import os
+            import pandas as pd
+            path = "./outputs/tmp/match_check.csv"
+            df = pd.DataFrame({"GridID": match_count.keys(), "num_matched": match_count.values()})
+            df["day"] = end_time.day
+            df["hour"] = end_time.hour
+            df["minute"] = end_time.minute
+            if not os.path.exists(path):
+                df.to_csv(path, index=False)
+            else:
+                tmp = pd.read_csv(path)
+                df = pd.concat([tmp, df])
+                df.to_csv(path, index=False)
 
     def get_orders_in_timeslice(self, start_time: datetime, end_time: datetime) -> List[Order]:
         return self.order_manager.get_orders_in_timeslice(start_time, end_time)

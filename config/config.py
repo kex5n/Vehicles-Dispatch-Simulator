@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import numpy as np
 import yaml
-from domain import AreaMode, DemandPredictionMode, DispatchMode, LocalRegionBound
+from domain import AreaMode, DispatchMode, LocalRegionBound
 
 
 # random.seed(1234)

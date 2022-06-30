@@ -60,6 +60,25 @@ class MockDemandPredictor(DemandPredictorInterface):
     def __is_same_date(self, other: datetime):
         return self.__date == other.date()
 
+class TrainingDemandPredictor(DemandPredictorInterface):
+    def __init__(self):
+        self.order_df = pd.read_csv("./data/medium/Order/modified/train/train.csv")
+
+    def predict(self, start_datetime: datetime, end_datetime: datetime, feature: np.ndarray, num_areas: int, debug: bool = False) -> np.ndarray:
+        df = self.order_df[(self.order_df["day"]==end_datetime.day) & (self.order_df["hour"]==end_datetime.hour) & (self.order_df["minute"]==end_datetime.minute)]
+        df.reset_index(inplace=True)
+        df.sort_values("GridID", inplace=True)
+        return np.array(df["target"].values)
+
+class GCNDemandPredictor(DemandPredictorInterface):
+    def __init__(self):
+        self.order_df = pd.read_csv("./models/checkpoints/gcn/pred.csv")
+
+    def predict(self, start_datetime: datetime, end_datetime: datetime, feature: np.ndarray, num_areas: int, debug: bool = False) -> np.ndarray:
+        df = self.order_df[(self.order_df["day"]==end_datetime.day) & (self.order_df["hour"]==end_datetime.hour) & (self.order_df["minute"]==end_datetime.minute)]
+        df.reset_index(inplace=True)
+        df.sort_values("GridID", inplace=True)
+        return np.array(df["pred"].values)
 
 def load_demand_prediction_component(
     dispatch_mode: DispatchMode,
@@ -69,6 +88,10 @@ def load_demand_prediction_component(
 ) -> DemandPredictorInterface:
     if dispatch_mode == dispatch_mode.RANDOM:
         return RandomDemandPredictor()
+    if demand_prediction_mode == DemandPredictionMode.TRAIN:
+        return TrainingDemandPredictor()
+    if demand_prediction_mode == DemandPredictionMode.TEST:
+        return GCNDemandPredictor()
     return MockDemandPredictor(
         demand_prediction_mode=demand_prediction_mode,
         area_mode=area_mode,

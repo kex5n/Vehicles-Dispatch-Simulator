@@ -31,7 +31,7 @@ if __name__ == "__main__":
     simulate_start_time = datetime.now()
     dqn_checkpoint_path = (
         Path(__file__).parents[1] / "models" / "checkpoints" / "dqn" 
-        / "2022-5-5_18:29:14" / "episode2.cpt"
+        / "2022-6-30_11:27:31" / "episode5.cpt"
     )
     # init modules
     simulator = Simulator(
@@ -45,7 +45,9 @@ if __name__ == "__main__":
         vehicles_server_meter=config.VEHICLE_SERVICE_KIRO_METER,
         neighbor_can_server=config.NELGHBOR_CAN_SERVER,
         minutes=config.MINUTES,
-        pick_up_time_window=config.PICKUPTIMEWINDOW
+        pick_up_time_window=config.PICKUPTIMEWINDOW,
+        data_size=config.DATA_SIZE,
+        is_train=False,
     )
     reward_culcurator = RewardCalculator()
     demand_predictor: DemandPredictorInterface = load_demand_prediction_component(
@@ -53,10 +55,11 @@ if __name__ == "__main__":
         demand_prediction_mode=demand_prediction_mode,
         area_mode=config.AREA_MODE,
     )
-    feature_manager = FeatureManager(k=5)
+    feature_manager = FeatureManager(k=5, mode=DemandPredictionMode.TEST)
     dispatch_module: DQNDispatch = load_dispatch_component(
         dispatch_mode=config.DISPATCH_MODE,
         config=config,
+        is_train=False,
     )
     if config.DISPATCH_MODE == DispatchMode.DQN:
         dispatch_module.load(dqn_checkpoint_path)
@@ -86,6 +89,7 @@ if __name__ == "__main__":
             area_manager=area_manager,
             vehicle_manager=vehicle_manager,
             prediction=prediction,
+            next_timeslice_datetime=end_datetime_of_this_timeslice,
         )
         simulator.set_dispatch_orders(dispatch_order_list)
         simulator.save_dispatch_history(dispatch_order_list)
@@ -98,7 +102,22 @@ if __name__ == "__main__":
             simulator.update()
             # for debug
             area_manager = simulator.area_manager_copy
-            before = [area.num_idle_vehicles for area in area_manager.get_area_list()]
+
+            import os
+            import pandas as pd
+            path = "./outputs/tmp/check.csv"
+            data = {"GridID": [area.id for area in area_manager.get_area_list()]}
+            data.update({"num_idle_vehicle": [area.num_idle_vehicles for area in area_manager.get_area_list()]})
+            df = pd.DataFrame(data)
+            df["day"] = end_datetime_of_this_timeslice.day
+            df["hour"] = end_datetime_of_this_timeslice.hour
+            df["minute"] = end_datetime_of_this_timeslice.minute
+            if not os.path.exists(path):
+                df.to_csv(path, index=False)
+            else:
+                tmp = pd.read_csv(path)
+                df = pd.concat([tmp, df])
+                df.to_csv(path, index=False)
 
             simulator.match()
             simulator.count_idle_vehicles()
@@ -128,6 +147,7 @@ if __name__ == "__main__":
                 area_manager=area_manager,
                 vehicle_manager=vehicle_manager,
                 prediction=prediction,
+                next_timeslice_datetime=end_datetime_of_this_timeslice,
             )
 
             # set dispatch order to simulator

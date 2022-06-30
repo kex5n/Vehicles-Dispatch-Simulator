@@ -28,6 +28,6 @@ VEHICLE_SERVICE_KIRO_METER: 0.5
 DISPATCH_MODE: "DQN"  # DQN or Random or NotDispatch
 AREA_MODE: "TransportationClustering"  # Grid or TransportationClustering
 
-EPISODE: 10
-K: 5
+EPISODE: 20
+K: 10
 DEBUG: False
