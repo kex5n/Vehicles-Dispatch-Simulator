@@ -160,6 +160,7 @@ class Q:
 
 class DQN:
     def __init__(self, k: int, num_actions: int):
+        self.k = k
         self.Q = Q(num_states=3+k*2+4, num_actions=num_actions)
 
     def update_q_function(self, area_manager: AreaManager, date_info, episode=None):

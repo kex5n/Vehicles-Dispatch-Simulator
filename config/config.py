@@ -15,7 +15,6 @@ np.random.seed(1234)
 class Config:
     DATA_SIZE: str
     MINUTES: int
-    NELGHBOR_CAN_SERVER: bool
     LOCAL_REGION_BOUND: LocalRegionBound
     VEHICLES_NUMBER: int
     SIDE_LENGTH_KIRO_METER: float
@@ -48,7 +47,6 @@ class Config:
         return Config(
             DATA_SIZE=config["DATA_SIZE"],
             MINUTES=config["MINUTES"],
-            NELGHBOR_CAN_SERVER=config["NELGHBOR_CAN_SERVER"],
             LOCAL_REGION_BOUND=LOCAL_REGION_BOUND,
             VEHICLES_NUMBER=config["VEHICLES_NUMBER"],
             SIDE_LENGTH_KIRO_METER=config["SIDE_LENGTH_KIRO_METER"],

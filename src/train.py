@@ -49,7 +49,6 @@ if __name__ == "__main__":
         local_region_bound=config.LOCAL_REGION_BOUND,
         side_length_meter=config.SIDE_LENGTH_KIRO_METER,
         vehicles_server_meter=config.VEHICLE_SERVICE_KIRO_METER,
-        neighbor_can_server=config.NELGHBOR_CAN_SERVER,
         minutes=config.MINUTES,
         pick_up_time_window=config.PICKUPTIMEWINDOW,
         data_size=config.DATA_SIZE,
@@ -185,7 +184,8 @@ if __name__ == "__main__":
                     # if (feature["from_area_id"] == 6) and (feature["to_area_id"] in (16, 18)):
                     #     breakpoint()
                 loss = dispatch_module.train(area_manager=area_manager, date_info=start_datetime_of_this_timeslice, episode=episode)
-                losses += loss
+                if loss is not None:
+                    losses += loss
                 # print(f"learn: {datetime.now() - s}")
                 # =================================================================
                 if (end_datetime_of_this_timeslice.hour == 0) & (end_datetime_of_this_timeslice.minute == 0):

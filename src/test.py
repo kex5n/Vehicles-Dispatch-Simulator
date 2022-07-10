@@ -31,7 +31,7 @@ if __name__ == "__main__":
     simulate_start_time = datetime.now()
     dqn_checkpoint_path = (
         Path(__file__).parents[1] / "models" / "checkpoints" / "dqn" 
-        / "2022-6-30_11:27:31" / "episode5.cpt"
+        / "2022-6-30_18:13:2" / "episode10.cpt"
     )
     # init modules
     simulator = Simulator(
@@ -43,7 +43,6 @@ if __name__ == "__main__":
         local_region_bound=config.LOCAL_REGION_BOUND,
         side_length_meter=config.SIDE_LENGTH_KIRO_METER,
         vehicles_server_meter=config.VEHICLE_SERVICE_KIRO_METER,
-        neighbor_can_server=config.NELGHBOR_CAN_SERVER,
         minutes=config.MINUTES,
         pick_up_time_window=config.PICKUPTIMEWINDOW,
         data_size=config.DATA_SIZE,

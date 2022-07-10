@@ -64,7 +64,6 @@ class Simulator(object):
         local_region_bound: LocalRegionBound,
         side_length_meter: int,
         vehicles_server_meter: int,
-        neighbor_can_server: bool,
         minutes: int,
         pick_up_time_window: np.float64,
         is_train: bool,
@@ -101,9 +100,6 @@ class Simulator(object):
             self.num_grid_height,
             self.neighbor_server_deep_limit,
         ) = self.__calculate_the_scale_of_devision()
-
-        # Control variable
-        self.neighbor_can_server = neighbor_can_server
 
         # Process variable
         self.real_time_in_experiment = None
@@ -625,6 +621,8 @@ class Simulator(object):
         and the size of the grid. It use dfs to find the nearest idle vehicles in the area.
         """
         match_count = {i:0 for i in range(self.area_manager.num_areas)}
+        order_occurred_count = {i:0 for i in range(self.area_manager.num_areas)}
+        rejected_count = {i:0 for i in range(self.area_manager.num_areas)}
 
         for area in self.area_manager.get_area_list():
             area.per_match_idle_vehicles = area.num_idle_vehicles
@@ -636,6 +634,7 @@ class Simulator(object):
             self.__static_service.increment_order_num()
             order_occurred_area: Area = self.area_manager.node_id_to_area(self.order_manager.now_order.pick_up_node_id)
             order_occurred_area.orders.append(self.order_manager.now_order)
+            order_occurred_count[order_occurred_area.id] += 1
 
             if order_occurred_area.num_idle_vehicles or order_occurred_area.num_neighbors:
                 MatchedInfo = namedtuple("MatchedInfo", ["matched_vehicle", "road_cost", "order_occurred_area"])
@@ -662,20 +661,11 @@ class Simulator(object):
                         elif tmp_road_cost < matched_info.road_cost:
                             matched_info = MatchedInfo(vehicle, tmp_road_cost, order_occurred_area)
                     # --------------------------------------
-                # Neighbor car search system to increase search range
-                elif self.neighbor_can_server and order_occurred_area.num_neighbors:
-                    matched_vehicle, road_cost, order_occurred_area = self.__find_server_vehicle_function(
-                        neighbor_server_deep_limit=self.neighbor_server_deep_limit,
-                        visit_list={},
-                        area=order_occurred_area,
-                        tmp_min=None,
-                        deep=0,
-                    )
-                    matched_info = MatchedInfo(matched_vehicle, road_cost, order_occurred_area)
                 
                 # When all Neighbor Cluster without any idle Vehicles
                 if matched_info is None or matched_info.road_cost > self.__pick_up_time_window:
                     self.__static_service.increment_reject_num()
+                    rejected_count[order_occurred_area.id] += 1
                     self.order_manager.now_order.set_arrive_info(ArriveInfo.REJECT)
                 # Successfully matched a vehicle
                 else:
@@ -740,7 +730,12 @@ class Simulator(object):
             import os
             import pandas as pd
             path = "./outputs/tmp/match_check.csv"
-            df = pd.DataFrame({"GridID": match_count.keys(), "num_matched": match_count.values()})
+            df = pd.DataFrame({
+                "GridID": match_count.keys(),
+                "num_order": order_occurred_count.values(),
+                "num_matched": match_count.values(),
+                "num_rejected": rejected_count.values(),
+            })
             df["day"] = end_time.day
             df["hour"] = end_time.hour
             df["minute"] = end_time.minute

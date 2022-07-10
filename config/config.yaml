@@ -2,7 +2,6 @@ MINUTES: 60000000000
 
 # It can enable the neighbor car search system to determine the search range according to the set search distance and the size of the grid.
 # It use dfs to find the nearest idle vehicles in the area.
-NELGHBOR_CAN_SERVER: False
 DATA_SIZE: "medium"  # small, medium or large
 LOCAL_REGION_BOUND:
   small:
@@ -21,7 +20,7 @@ LOCAL_REGION_BOUND:
     south: 40.700
     north: 40.785
 
-VEHICLES_NUMBER: 500
+VEHICLES_NUMBER: 800
 SIDE_LENGTH_KIRO_METER: 0.5
 VEHICLE_SERVICE_KIRO_METER: 0.5
 

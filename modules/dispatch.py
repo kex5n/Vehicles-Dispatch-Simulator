@@ -68,7 +68,7 @@ class RandomDispatch(DispatchModuleInterface):
         return dispatch_order_list
 
 
-class DQNDispatch(DispatchModuleInterface):
+class DQNDispatch(DispatchModuleInterface): # COX
     def __init__(self, config: Config, is_train):
         self.model = DQN(k=config.K, num_actions=config.K+1)
         if is_train:
@@ -163,11 +163,81 @@ class VehicleSelector:
             i = self.i
             self.i += 1
             return self.vehicles[i]
-        
+
+
+class NewDispatch(DQNDispatch): # COX
+    def __call__(self, area_manager: AreaManager, vehicle_manager: VehicleManager, prediction: np.ndarray, next_timeslice_datetime, feature_manager=None, episode: int = 0) -> List[DispatchOrder]:
+        dispatch_order_list: List[DispatchOrder] = []
+        supply_array = np.array([area.num_idle_vehicles for area in area_manager.get_area_list()])
+        idle_vehicle_ids = []
+        area_idle_vehicle_dict = {}
+        idle_vehicles = []
+        for area in area_manager.get_area_list():
+            idle_vehicle_ids = area.get_idle_vehicle_ids()
+            area_idle_vehicle_dict.update({area.id: [vehicle_manager.get_vehicle_by_vehicle_id(i) for i in idle_vehicle_ids]})
+            idle_vehicles += [vehicle_manager.get_vehicle_by_vehicle_id(i) for i in idle_vehicle_ids]
+
+        supply_array_copy = deepcopy(supply_array)
+        prediction_copy = deepcopy(prediction)
+
+        values_mask = np.array([[False for _ in range(self.model.k+1)] for _ in range(area_manager.num_areas)])
+        for i, area in enumerate(area_manager.get_area_list()):
+            values_mask[i][area.num_neighbors+1:] = True
+
+        self.model.Q.model.eval()
+        while len(idle_vehicles) > 0:
+            # calc state
+            states = []
+            for current_area in area_manager.get_area_list():
+                state_list = self.feature_manager.calc_state(
+                    area=current_area,
+                    demand_array=prediction_copy,
+                    supply_array=supply_array_copy,
+                    next_timeslice_datetime=next_timeslice_datetime,
+                )
+                states.append(state_list)
+            states_tensor = torch.FloatTensor(states)
+
+            # select vehicle and action
+            values = self.model.Q.model(states_tensor)
+            values[values_mask] = -np.inf
+            max_values, indices = values.max(axis=1)
+            mask = [False for _ in range(area_manager.num_areas)]
+            for k, v in area_idle_vehicle_dict.items():
+                if len(v) == 0:
+                    mask[k] = True
+            max_values[mask] = -np.inf
+            _, indice = max_values.max(axis=0)
+            int_indice = int(indice)
+            current_vehicle: Vehicle = area_idle_vehicle_dict[int_indice][0]
+            action = int(indices[int_indice])
+            candidates = [int_indice] + area_manager.get_area_by_area_id(int_indice).get_neighbor_ids()
+            to_area_id = candidates[action]
+
+            # update state
+            supply_array_copy[int_indice] -= 1
+            supply_array_copy[to_area_id] += 1
+
+            # remove
+            idle_vehicles.remove(current_vehicle)
+            area_idle_vehicle_dict[int_indice].remove(current_vehicle)
+
+            dispatch_order = DispatchOrder(
+                vehicle_id=current_vehicle.id,
+                start_node_id=current_vehicle.location_node_id,
+                end_node_id=area_manager.get_area_by_area_id(to_area_id).centroid,
+                action=action,
+                from_area_id=int_indice,
+                to_area_id=to_area_id,
+            )
+            dispatch_order_list.append(dispatch_order)
+
+        return dispatch_order_list
+
 
 def load_dispatch_component(dispatch_mode: DispatchMode, config: Config, is_train=False) -> DispatchModuleInterface:
     if dispatch_mode == DispatchMode.DQN:
-        dispatch_module = DQNDispatch(config=config, is_train=is_train)
+        dispatch_module = NewDispatch(config=config, is_train=is_train)
         return dispatch_module
     elif dispatch_mode == DispatchMode.RANDOM:
         dispatch_module = RandomDispatch()
